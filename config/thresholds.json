@@ -1,0 +1,74 @@
+{
+  "1h": [
+    {
+      "sku_threshold": 3,
+      "total_threshold": 40,
+      "recipients": [
+        "veer@gudz.com",
+        "chamike@gudz.com",
+        "ammar@gudz.com",
+        "supply@gudz.com",
+        "anuja@gudz.com",
+        "zainab@gudz.com",
+        "nimsath@gudz.com",
+        "aflal@gudz.com",
+        "Hanas@gudz.com",
+        "automationstatusgudz@gmail.com"
+      ]
+    },
+    {
+      "sku_threshold": 6,
+      "total_threshold": 45,
+      "recipients": [
+        "veer@gudz.com",
+        "chamike@gudz.com",
+        "ammar@gudz.com",
+        "supply@gudz.com",
+        "anuja@gudz.com",
+        "zainab@gudz.com",
+        "nimsath@gudz.com",
+        "aflal@gudz.com",
+        "Hanas@gudz.com",
+        "feedcheckersms.2l6ik6@zapiermail.com",
+        "feedcheckphonecall.2l6ik6@zapiermail.com",
+        "automationstatusgudz@gmail.com"
+      ]
+    }
+  ],
+  "4h": [
+    {
+      "sku_threshold": 10,
+      "total_threshold": 120,
+      "recipients": [
+        "veer@gudz.com",
+        "chamike@gudz.com",
+        "ammar@gudz.com",
+        "supply@gudz.com",
+        "anuja@gudz.com",
+        "zainab@gudz.com",
+        "nimsath@gudz.com",
+        "aflal@gudz.com",
+        "Hanas@gudz.com",
+        "automationstatusgudz@gmail.com"
+      ]
+    },
+    {
+      "sku_threshold": 20,
+      "total_threshold": 145,
+      "recipients": [
+        "veer@gudz.com",
+        "chamike@gudz.com",
+        "ammar@gudz.com",
+        "supply@gudz.com",
+        "anuja@gudz.com",
+        "zainab@gudz.com",
+        "nimsath@gudz.com",
+        "aflal@gudz.com",
+        "Hanas@gudz.com",
+        "feedcheckersms.2l6ik6@zapiermail.com",
+        "feedcheckphonecall.2l6ik6@zapiermail.com",
+        "automationstatusgudz@gmail.com"
+      ]
+    }
+  ]
+}

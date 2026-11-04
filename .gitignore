@@ -1,0 +1,12 @@
+.env
+venv/
+__pycache__/
+*.pyc
+logs/
+.pytest_cache/
+
+# Original workbook contains hardcoded secrets in its embedded VBA project
+# (now mirrored, in plaintext, in VBA_Source/) -- never commit either.
+Sales Reports - CA.xlsm
+Sales Reports - CA.BACKUP.xlsm
+VBA_Source/

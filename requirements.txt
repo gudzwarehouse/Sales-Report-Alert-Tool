@@ -1,0 +1,6 @@
+python-dotenv
+openpyxl
+msoffcrypto-tool
+pytest
+streamlit
+pandas
