@@ -12,8 +12,6 @@ Run via run_ui.bat, or directly: streamlit run app.py
 
 from __future__ import annotations
 
-import json
-
 import pandas as pd
 import streamlit as st
 
@@ -78,7 +76,7 @@ def _parse_recipients(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-tab_thresholds, tab_exceptions, tab_raw = st.tabs(["Thresholds & recipients", "Excluded SKUs", "Current config"])
+tab_thresholds, tab_exceptions, tab_overview = st.tabs(["Thresholds & recipients", "Excluded SKUs", "Project overview"])
 
 with tab_thresholds:
     try:
@@ -157,12 +155,35 @@ with tab_exceptions:
         if col_cancel.button("Cancel", key="cancel_exceptions"):
             st.rerun()
 
-with tab_raw:
-    st.subheader("Current config (read-only)")
-    try:
-        st.markdown("**config/thresholds.json**")
-        st.json(config_store.load_thresholds())
-        st.markdown("**config/exceptions.json**")
-        st.json({"skus": config_store.load_exceptions()})
-    except Exception as error:  # noqa: BLE001
-        st.error(f"Could not load config: {error}")
+SOURCE_WORKBOOKS = [
+    (
+        "StockFeeds.xlsm",
+        r"\\mbc-nt01\Management\Excel Automatic\StockFeeds.xlsm",
+        "<b>When:</b> fetched fresh at the start of every single pipeline run -- "
+        "never a cached local copy, so the SKU mapping is always current.<br>"
+        "<b>How often:</b> as often as the pipeline itself runs -- every ~40 "
+        "minutes, set in Windows Task Scheduler (calling run_scheduler.bat), the "
+        "same interval the original VBA timer used. Not controlled by any JSON "
+        "config file.<br>"
+        "<b>How it works:</b> downloads the file from the path above, decrypts it "
+        "with the password, reads its \"Inventory\" sheet to map each supplier's "
+        "SKU to our own internal SKU, then deletes the decrypted temp copy.<br>"
+        "<b>Configured via .env</b> (not JSON -- this is a path + a password, not "
+        "editable config): <code>STOCKFEEDS_XLSM_PATH</code> and "
+        "<code>STOCKFEEDS_XLSM_PASSWORD</code>.",
+    ),
+]
+
+with tab_overview:
+    st.subheader("Source Excel file")
+    st.markdown(
+        '<div class="subtitle">The one workbook this pipeline actually reads from at runtime.</div>',
+        unsafe_allow_html=True,
+    )
+    for name, path, description in SOURCE_WORKBOOKS:
+        st.markdown(
+            f'<div class="bucket-card"><div style="font-weight:600; color:#111827; margin-bottom:4px;">{name}</div>'
+            f'<code>{path}</code>'
+            f'<div style="color:#374151; margin-top:8px;">{description}</div></div>',
+            unsafe_allow_html=True,
+        )
