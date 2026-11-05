@@ -76,7 +76,9 @@ def _parse_recipients(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-tab_thresholds, tab_exceptions, tab_overview = st.tabs(["Thresholds & recipients", "Excluded SKUs", "Project overview"])
+tab_thresholds, tab_price_check, tab_exceptions, tab_overview = st.tabs(
+    ["Thresholds & recipients", "Price-drop check", "Excluded SKUs", "Project overview"]
+)
 
 with tab_thresholds:
     try:
@@ -130,6 +132,47 @@ with tab_thresholds:
                         st.rerun()
                     except ValueError as error:
                         st.error(str(error))
+
+with tab_price_check:
+    st.subheader("Price-drop check")
+    st.markdown(
+        '<div class="subtitle">Flags a SKU whose lowest sale price today has dropped more than this percentage '
+        "vs. its baseline (yesterday's own lowest sale, or ChannelAdvisor's listed price for a brand-new SKU with "
+        "no sales history yet) -- catches a mispriced listing being bulk-bought. Runs every ~40 minutes alongside "
+        "the order-count checks, and deliberately ignores the Excluded SKUs list on the next tab: a price mistake "
+        "can happen on any SKU.</div>",
+        unsafe_allow_html=True,
+    )
+    try:
+        price_check_config = config_store.load_price_check_config()
+    except Exception as error:  # noqa: BLE001
+        st.error(f"Could not load config/price_check.json: {error}")
+        price_check_config = None
+
+    if price_check_config is not None:
+        with st.form(key="form_price_check"):
+            threshold_percent = st.number_input(
+                "Price drop threshold (%)",
+                min_value=1, max_value=100,
+                value=int(price_check_config["price_drop_threshold_percent"]),
+            )
+            recipients_text = st.text_area(
+                "Recipients (one address per line)",
+                value=_recipients_text(price_check_config["recipients"]),
+                height=150,
+            )
+            saved = st.form_submit_button("Save changes", type="primary")
+            if saved:
+                updated = {
+                    "price_drop_threshold_percent": int(threshold_percent),
+                    "recipients": _parse_recipients(recipients_text),
+                }
+                try:
+                    config_store.save_price_check_config(updated)
+                    st.success("Saved price-drop check settings.")
+                    st.rerun()
+                except ValueError as error:
+                    st.error(str(error))
 
 with tab_exceptions:
     st.subheader("Excluded SKUs")

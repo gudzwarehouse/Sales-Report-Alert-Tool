@@ -25,10 +25,11 @@ from __future__ import annotations
 
 import csv
 import os
+from collections import Counter
 from pathlib import Path
 from typing import Callable
 
-from notifications import render_sales_alert_html
+from notifications import render_product_breach_html
 
 # 0-based column indices, matching the VBA's lettered columns (A, D).
 COL_ORDER_ID = 0
@@ -119,27 +120,107 @@ def check_total_threshold(total_count: int, buckets: list[dict]) -> tuple[int, l
     return None
 
 
-def _format_sku_alert_body(threshold: int, matched: list[tuple[str, int]]) -> str:
-    lines = [f"The following SKUs have over {threshold} orders"]
+def _aggregate_sku_stats(rows: list[dict]) -> dict[str, dict]:
+    """Per our_sku: display title (first non-blank seen), total quantity,
+    total sales value (unit_price * quantity), and a Counter of orders by
+    sales channel (e.g. {"Amazon UK": 3, "Temu UK": 1}) -- the product/
+    channel-level detail the plain order-count fields don't carry. Rows
+    missing title/quantity/unit_price/channel (e.g. the legacy CSV path,
+    which never read those columns) default to "", 1, 0.0, "" respectively
+    so this still works, just with less detail."""
+    stats: dict[str, dict] = {}
+    for row in rows:
+        sku = row["our_sku"]
+        entry = stats.setdefault(sku, {"title": "", "quantity": 0, "sales_value": 0.0, "channels": Counter()})
+        qty = row.get("quantity") or 1
+        price = row.get("unit_price") or 0.0
+        entry["quantity"] += qty
+        entry["sales_value"] += qty * price
+        if not entry["title"] and row.get("title"):
+            entry["title"] = row["title"]
+        channel = row.get("channel")
+        if channel:
+            entry["channels"][channel] += 1
+    return stats
+
+
+def _format_channels(channels: Counter) -> str:
+    """"Amazon UK (3), Temu UK (1)" -- most frequent channel first."""
+    return ", ".join(f"{name} ({count})" for name, count in channels.most_common())
+
+
+def _severity_for_threshold(threshold: int, buckets: list[dict], key: str) -> str:
+    """HIGH for the highest-configured bucket (the one whose recipients also
+    include the Zapier SMS/phone-call trigger addresses), MEDIUM for any
+    lower bucket."""
+    highest = max(bucket[key] for bucket in buckets)
+    return "HIGH" if threshold >= highest else "MEDIUM"
+
+
+def _sku_breach_items(matched: list[tuple[str, int]], stats: dict[str, dict]) -> list[dict]:
+    items = []
     for sku, count in matched:
-        lines.append(f"{sku}\t{count}")
+        s = stats.get(sku, {"title": "", "quantity": count, "sales_value": 0.0, "channels": Counter()})
+        items.append({
+            "sku": sku,
+            "title": s["title"] or sku,
+            "orders": count,
+            "quantity": s["quantity"],
+            "sales_value": s["sales_value"],
+            "channels": _format_channels(s["channels"]),
+        })
+    return items
+
+
+def _window_breakdown_items(counts: dict[str, int], stats: dict[str, dict], *, limit: int = 10) -> list[dict]:
+    """Top SKUs by quantity across the whole window, for the total-threshold
+    alert's product breakdown (that alert is about overall volume, not one
+    SKU, so it shows what's actually driving the number instead of just the
+    total)."""
+    items = [
+        {"sku": sku, "title": s["title"] or sku, "orders": counts.get(sku, 0),
+         "quantity": s["quantity"], "sales_value": s["sales_value"],
+         "channels": _format_channels(s["channels"])}
+        for sku, s in stats.items() if sku
+    ]
+    items.sort(key=lambda item: item["quantity"], reverse=True)
+    return items[:limit]
+
+
+def _window_totals(stats: dict[str, dict], total_orders: int) -> dict:
+    return {
+        "orders": total_orders,
+        "quantity": sum(s["quantity"] for s in stats.values()),
+        "sales_value": sum(s["sales_value"] for s in stats.values()),
+    }
+
+
+def _format_sku_alert_body(threshold: int, items: list[dict]) -> str:
+    lines = [f"The following SKUs have over {threshold} orders", "", "Product\tSKU\tChannel(s)\tOrders\tQty\tSales"]
+    for item in items:
+        lines.append(
+            f"{item['title']}\t{item['sku']}\t{item.get('channels', '')}\t{item['orders']}\t"
+            f"{item['quantity']}\t£{item['sales_value']:.2f}"
+        )
     return "\n".join(lines)
 
 
-def _sku_alert_html(title: str, threshold: int, matched: list[tuple[str, int]]) -> str:
-    return render_sales_alert_html(
-        title=title,
-        threshold_label=f"The following SKUs have over {threshold} orders",
-        rows=matched,
-    )
-
-
-def _total_alert_html(title: str, threshold: int, total: int) -> str:
-    return render_sales_alert_html(
-        title=title,
-        threshold_label=f"Total orders are greater than {threshold}",
-        rows=[("Total Orders", total)],
-    )
+def _format_total_alert_body(threshold: int, total: int, totals: dict, items: list[dict]) -> str:
+    lines = [
+        f"Total orders are greater than {threshold}",
+        f"Total Orders: {total}",
+        f"Total Quantity: {totals['quantity']}",
+        f"Total Sales Value: £{totals['sales_value']:.2f}",
+        "",
+        "Top products in this window:",
+        "Product\tSKU\tChannel(s)\tOrders\tQty\tSales",
+    ]
+    for item in items:
+        lines.append(
+            f"{item['title']}\t{item['sku']}\t{item.get('channels', '')}\t{item['orders']}\t"
+            f"{item['quantity']}\t£{item['sales_value']:.2f}"
+        )
+    return "\n".join(lines)
 
 
 def evaluate_1h(
@@ -157,25 +238,42 @@ def evaluate_1h(
     """
     rows = map_to_our_sku(raw_rows, sku_lookup)
     buckets = config["1h"]
+    stats = _aggregate_sku_stats(rows)
 
     counts = count_by_sku(rows)
     for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
+        severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
+        items = _sku_breach_items(matched, stats)
         send_alert(
-            "CA Sales - Orders last hour",
-            _format_sku_alert_body(threshold, matched),
+            f"[1h TH] [{severity}] CA Sales - Orders last hour",
+            _format_sku_alert_body(threshold, items),
             to=recipients,
-            html_body=_sku_alert_html("CA Sales - Orders last hour", threshold, matched),
+            html_body=render_product_breach_html(
+                title="Orders last hour -- SKU threshold breach",
+                severity=severity,
+                subtitle=f"The following SKUs have over {threshold} orders in the last hour",
+                items=items,
+            ),
         )
 
     total = count_distinct_orders(rows)
     hit = check_total_threshold(total, buckets)
     if hit is not None:
         threshold, recipients = hit
+        severity = _severity_for_threshold(threshold, buckets, "total_threshold")
+        breakdown = _window_breakdown_items(counts, stats)
+        totals = _window_totals(stats, total)
         send_alert(
-            "CA Sales - Orders last 1 hour",
-            f"Total orders are greater than {threshold}\nTotal Orders: {total}",
+            f"[1h TH] [{severity}] CA Sales - Orders last 1 hour (Total: {total})",
+            _format_total_alert_body(threshold, total, totals, breakdown),
             to=recipients,
-            html_body=_total_alert_html("CA Sales - Orders last 1 hour", threshold, total),
+            html_body=render_product_breach_html(
+                title="Orders last 1 hour -- Total threshold breach",
+                severity=severity,
+                subtitle=f"Total orders are greater than {threshold} (actual: {total})",
+                items=breakdown,
+                totals=totals,
+            ),
         )
 
 
@@ -189,25 +287,42 @@ def evaluate_4h(
     """Port of ReadLast4Hours's counting/alerting logic, no I/O (see evaluate_1h)."""
     rows = map_to_our_sku(raw_rows, sku_lookup)
     buckets = config["4h"]
+    stats = _aggregate_sku_stats(rows)
 
     counts = count_by_sku(rows)
     for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
+        severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
+        items = _sku_breach_items(matched, stats)
         send_alert(
-            "CA Sales - Orders last 4 hours",
-            _format_sku_alert_body(threshold, matched),
+            f"[4h TH] [{severity}] CA Sales - Orders last 4 hours",
+            _format_sku_alert_body(threshold, items),
             to=recipients,
-            html_body=_sku_alert_html("CA Sales - Orders last 4 hours", threshold, matched),
+            html_body=render_product_breach_html(
+                title="Orders last 4 hours -- SKU threshold breach",
+                severity=severity,
+                subtitle=f"The following SKUs have over {threshold} orders in the last 4 hours",
+                items=items,
+            ),
         )
 
     total = count_distinct_orders(rows)
     hit = check_total_threshold(total, buckets)
     if hit is not None:
         threshold, recipients = hit
+        severity = _severity_for_threshold(threshold, buckets, "total_threshold")
+        breakdown = _window_breakdown_items(counts, stats)
+        totals = _window_totals(stats, total)
         send_alert(
-            "CA Sales - Orders last 4 hours",
-            f"Total orders are greater than {threshold}\nTotal Orders: {total}",
+            f"[4h TH] [{severity}] CA Sales - Orders last 4 hours (Total: {total})",
+            _format_total_alert_body(threshold, total, totals, breakdown),
             to=recipients,
-            html_body=_total_alert_html("CA Sales - Orders last 4 hours", threshold, total),
+            html_body=render_product_breach_html(
+                title="Orders last 4 hours -- Total threshold breach",
+                severity=severity,
+                subtitle=f"Total orders are greater than {threshold} (actual: {total})",
+                items=breakdown,
+                totals=totals,
+            ),
         )
 
 

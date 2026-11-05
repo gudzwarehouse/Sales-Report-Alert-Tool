@@ -109,8 +109,8 @@ def test_run_1h_check_sends_sku_and_total_alerts_and_deletes_file(tmp_path):
 
     assert not path.exists()  # 1h file is deleted after processing
     subjects = [s for s, _, _ in sent]
-    assert "CA Sales - Orders last hour" in subjects  # per-SKU alert
-    assert "CA Sales - Orders last 1 hour" in subjects  # total alert
+    assert any("[1h TH]" in s and "Orders last hour" in s for s in subjects)  # per-SKU alert
+    assert any("[1h TH]" in s and "Orders last 1 hour (Total:" in s for s in subjects)  # total alert
     assert all(to == EMAIL_ONLY for _, _, to in sent)
 
 
@@ -126,8 +126,9 @@ def test_run_1h_check_crossing_higher_threshold_includes_sms_recipients(tmp_path
         send_alert=lambda subject, body, *, to, html_body=None: sent.append((subject, body, to)),
     )
 
-    sku_alert = next(s for s in sent if s[0] == "CA Sales - Orders last hour")
-    assert sku_alert[2] == EMAIL_PLUS_SMS  # 7 >= 6-threshold bucket -> SMS/call addresses included
+    sku_alert = next(s for s in sent if "Orders last hour" in s[0] and "(Total:" not in s[0])
+    assert "[HIGH]" in sku_alert[0]  # 7 >= 6-threshold bucket -> HIGH severity
+    assert sku_alert[2] == EMAIL_PLUS_SMS  # ...and SMS/call addresses included
 
 
 def test_run_4h_check_does_not_delete_file(tmp_path):
@@ -157,8 +158,8 @@ def test_evaluate_1h_sends_sku_and_total_alerts_from_rows_directly():
     )
 
     subjects = [s for s, _, _ in sent]
-    assert "CA Sales - Orders last hour" in subjects
-    assert "CA Sales - Orders last 1 hour" in subjects
+    assert any("[1h TH]" in s and "Orders last hour" in s for s in subjects)
+    assert any("[1h TH]" in s and "Orders last 1 hour (Total:" in s for s in subjects)
     assert all(to == EMAIL_ONLY for _, _, to in sent)
 
 
@@ -173,11 +174,12 @@ def test_evaluate_4h_sends_sku_and_total_alerts_from_rows_directly():
     )
 
     subjects = [s for s, _, _ in sent]
-    assert "CA Sales - Orders last 4 hours" in subjects
+    assert any("[4h TH]" in s and "Orders last 4 hours" in s for s in subjects)
 
 
 def test_evaluate_1h_sends_html_body_alongside_text():
-    rows = [{"order_id": f"O{i}", "supplier_sku": "SUP-1"} for i in range(10)]
+    rows = [{"order_id": f"O{i}", "supplier_sku": "SUP-1", "title": "Widget", "quantity": 1, "unit_price": 5.0}
+            for i in range(10)]
     sent = []
     config = {"1h": [{"sku_threshold": 3, "total_threshold": 5, "recipients": EMAIL_ONLY}]}
 
@@ -187,10 +189,34 @@ def test_evaluate_1h_sends_html_body_alongside_text():
     )
 
     assert all(html is not None and "<html" in html for _, html in sent)
-    sku_alert_html = next(html for subject, html in sent if subject == "CA Sales - Orders last hour")
+    sku_alert_html = next(html for subject, html in sent if "Orders last hour" in subject and "(Total:" not in subject)
     assert "OUR-1" in sku_alert_html  # the flagged SKU appears in the HTML table
-    total_alert_html = next(html for subject, html in sent if subject == "CA Sales - Orders last 1 hour")
-    assert "Total Orders" in total_alert_html
+    assert "Widget" in sku_alert_html  # product name/title shown
+    assert "£50.00" in sku_alert_html  # sales value (10 orders x 1 qty x £5.00)
+    total_alert_html = next(html for subject, html in sent if "(Total:" in subject)
+    assert "Total" in total_alert_html
+
+
+def test_evaluate_1h_sku_alert_shows_channel_breakdown():
+    rows = (
+        [{"order_id": f"O{i}", "supplier_sku": "SUP-1", "title": "Widget", "quantity": 1,
+          "unit_price": 5.0, "channel": "Amazon UK"} for i in range(7)]
+        + [{"order_id": f"O{i}", "supplier_sku": "SUP-1", "title": "Widget", "quantity": 1,
+            "unit_price": 5.0, "channel": "Temu UK"} for i in range(7, 10)]
+    )
+    sent = []
+    config = {"1h": [{"sku_threshold": 3, "total_threshold": 5, "recipients": EMAIL_ONLY}]}
+
+    evaluate_1h(
+        rows, {"SUP-1": "OUR-1"}, config, exceptions=set(),
+        send_alert=lambda subject, body, *, to, html_body=None: sent.append((subject, body, html_body)),
+    )
+
+    sku_alert = next((s, b, h) for s, b, h in sent if "Orders last hour" in s and "(Total:" not in s)
+    _, text_body, html_body = sku_alert
+    assert "Amazon UK (7)" in html_body
+    assert "Temu UK (3)" in html_body
+    assert "Amazon UK (7)" in text_body  # plain-text fallback also shows channel breakdown
 
 
 def test_evaluate_1h_no_rows_sends_no_alerts():

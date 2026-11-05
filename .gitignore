@@ -5,6 +5,10 @@ __pycache__/
 logs/
 .pytest_cache/
 
+# Runtime-generated per-SKU price tracking for the price-drop check
+# (Phase 4) -- grows/updates every run, not hand-edited config.
+config/price_tracking.csv
+
 # Original workbook contains hardcoded secrets in its embedded VBA project
 # (now mirrored, in plaintext, in VBA_Source/) -- never commit either.
 Sales Reports - CA.xlsm
