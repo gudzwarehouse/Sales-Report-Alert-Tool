@@ -10,6 +10,8 @@ from sales_pipeline import (
     check_total_threshold,
     count_by_sku,
     count_distinct_orders,
+    evaluate_1h,
+    evaluate_4h,
     load_orders_csv,
     map_to_our_sku,
     run_1h_check,
@@ -100,7 +102,7 @@ def test_run_1h_check_sends_sku_and_total_alerts_and_deletes_file(tmp_path):
     sent = []
     config = {"1h": [{"sku_threshold": 3, "total_threshold": 5, "recipients": EMAIL_ONLY}]}
 
-    def fake_send_alert(subject, body, *, to):
+    def fake_send_alert(subject, body, *, to, html_body=None):
         sent.append((subject, body, to))
 
     run_1h_check(path, {"SUP-1": "OUR-1"}, config, exceptions=set(), send_alert=fake_send_alert)
@@ -121,7 +123,7 @@ def test_run_1h_check_crossing_higher_threshold_includes_sms_recipients(tmp_path
 
     run_1h_check(
         path, {"SUP-1": "OUR-1"}, config, exceptions=set(),
-        send_alert=lambda subject, body, *, to: sent.append((subject, body, to)),
+        send_alert=lambda subject, body, *, to, html_body=None: sent.append((subject, body, to)),
     )
 
     sku_alert = next(s for s in sent if s[0] == "CA Sales - Orders last hour")
@@ -137,3 +139,62 @@ def test_run_4h_check_does_not_delete_file(tmp_path):
     run_4h_check(path, {"SUP-1": "OUR-1"}, config, exceptions=set(), send_alert=lambda *a, **k: None)
 
     assert path.exists()  # 4h file is NOT deleted, matching ReadLast4Hours
+
+
+# evaluate_1h/evaluate_4h are the pure cores run_1h_check/run_4h_check
+# delegate to -- these exercise them directly with API-shaped rows (no
+# CSV file at all), matching how ca_orders_client.fetch_recent_order_rows
+# feeds them in run_sales_alerts.py.
+
+def test_evaluate_1h_sends_sku_and_total_alerts_from_rows_directly():
+    rows = [{"order_id": f"O{i}", "supplier_sku": "SUP-1"} for i in range(10)]
+    sent = []
+    config = {"1h": [{"sku_threshold": 3, "total_threshold": 5, "recipients": EMAIL_ONLY}]}
+
+    evaluate_1h(
+        rows, {"SUP-1": "OUR-1"}, config, exceptions=set(),
+        send_alert=lambda subject, body, *, to, html_body=None: sent.append((subject, body, to)),
+    )
+
+    subjects = [s for s, _, _ in sent]
+    assert "CA Sales - Orders last hour" in subjects
+    assert "CA Sales - Orders last 1 hour" in subjects
+    assert all(to == EMAIL_ONLY for _, _, to in sent)
+
+
+def test_evaluate_4h_sends_sku_and_total_alerts_from_rows_directly():
+    rows = [{"order_id": f"O{i}", "supplier_sku": "SUP-1"} for i in range(25)]
+    sent = []
+    config = {"4h": [{"sku_threshold": 10, "total_threshold": 20, "recipients": EMAIL_ONLY}]}
+
+    evaluate_4h(
+        rows, {"SUP-1": "OUR-1"}, config, exceptions=set(),
+        send_alert=lambda subject, body, *, to, html_body=None: sent.append((subject, body, to)),
+    )
+
+    subjects = [s for s, _, _ in sent]
+    assert "CA Sales - Orders last 4 hours" in subjects
+
+
+def test_evaluate_1h_sends_html_body_alongside_text():
+    rows = [{"order_id": f"O{i}", "supplier_sku": "SUP-1"} for i in range(10)]
+    sent = []
+    config = {"1h": [{"sku_threshold": 3, "total_threshold": 5, "recipients": EMAIL_ONLY}]}
+
+    evaluate_1h(
+        rows, {"SUP-1": "OUR-1"}, config, exceptions=set(),
+        send_alert=lambda subject, body, *, to, html_body=None: sent.append((subject, html_body)),
+    )
+
+    assert all(html is not None and "<html" in html for _, html in sent)
+    sku_alert_html = next(html for subject, html in sent if subject == "CA Sales - Orders last hour")
+    assert "OUR-1" in sku_alert_html  # the flagged SKU appears in the HTML table
+    total_alert_html = next(html for subject, html in sent if subject == "CA Sales - Orders last 1 hour")
+    assert "Total Orders" in total_alert_html
+
+
+def test_evaluate_1h_no_rows_sends_no_alerts():
+    sent = []
+    config = {"1h": SKU_BUCKETS}
+    evaluate_1h([], {}, config, exceptions=set(), send_alert=lambda *a, **k: sent.append(a))
+    assert sent == []

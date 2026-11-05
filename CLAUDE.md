@@ -10,6 +10,29 @@ All modernization work happens on **local copies or newly created files in
 this repo**. Pulling a fresh copy of a CSV/workbook *from* the shared drive
 to test against is fine (read-only); writing back to it is not.
 
+## Hard rule: ChannelAdvisor ("CA") credentials are read-only, always
+
+`CA_UK_*`/`CA_IRE_*` in `.env` are live ChannelAdvisor OAuth credentials
+(pulled from `Amazon Padding Automation` for reference — see
+`.env`'s comment above them). **Any use of these credentials against
+ChannelAdvisor's *data* endpoints in this project is GET-only** —
+`CA_API_URL`/`CA_ORDERS_API_URL` (Fulfillments, Orders) for reading data
+back, never a write. The one exception is `CA_TOKEN_URL` — the OAuth
+refresh-token exchange is necessarily a `POST` (that's how OAuth works),
+but it's an auth handshake, not a ChannelAdvisor data mutation, so it
+doesn't violate this rule; `ca_orders_client.py` is the only place that
+calls it. Never call ChannelAdvisor's Ship endpoint (`POST
+.../Orders(id)/Ship`) or any other mutating ChannelAdvisor call from this
+project — that's `Amazon Padding Automation`'s job
+(`channeladvisor_ship.py`), not this one's.
+
+As of Phase 3, `CA_UK_*` is load-bearing, not just reference: it's how the
+pipeline now reads its order data (see "Data source" below). `CA_IRE_*`
+remains unused — a live diff (see "Data source") showed Ireland-shipping
+orders already appear inside the UK profile's own export, so IRE looks
+unrelated to this tool; kept in `.env` for reference in case that
+assumption turns out wrong.
+
 ## What this is
 
 A single Excel workbook (`Sales Reports - CA.xlsm`) that polls two
@@ -169,7 +192,49 @@ while working inside such a sandbox, that's not necessarily a real
 permissions problem — verify from a normal terminal/Task Scheduler run on
 the actual machine before concluding the path is wrong.
 
-## Modernization plan — Python replacement
+## Data source: ChannelAdvisor Orders API (Phase 3), not the CSV exports
+
+`run_sales_alerts.py` no longer polls `LAST_HOUR_FOLDER`/
+`LAST_4_HOURS_FOLDER` for CSVs. It calls `ca_orders_client.
+fetch_recent_order_rows(window_minutes)` directly against ChannelAdvisor's
+read-only Orders API (`CA_ORDERS_API_URL`, `CA_UK_*` creds), once for the
+1h bucket (`window_minutes=60`) and once for the 4h bucket
+(`window_minutes=240`), per run.
+
+**Why this is safe to trust as equivalent to the old CSV exports**:
+confirmed live this session, not assumed — downloaded the actual newest
+`Orders Last 1 Hour*.csv`/`Orders Last 4 Hours*.csv` from ChannelAdvisor's
+own Export Center (`.../UploadDownload.mvc/List?apid=12015328`, the same
+`CA_UK_PROFILE_ID`) and diffed every `(Site Order ID, SKU)` pair against
+the same window pulled straight from the API — **zero mismatches** in
+either file. Also confirmed: every row in both exports had
+`ShippingStatus = Unshipped`, and order dates ranged well past the nominal
+"1 hour"/"4 hours" (an 11:00-generated file held orders from 09:03) — so
+these were always "currently-Unshipped order backlog, re-pulled
+periodically," not a strict rolling time slice. `fetch_recent_order_rows`
+reproduces that directly: `CreatedDateUtc` in the trailing window **and**
+`ShippingStatus eq 'Unshipped'`.
+
+**No incremental watermark** — every run re-queries its own full trailing
+window from "now," so a late/skipped scheduled run is self-healing as long
+as the next run happens before the window rolls past it (the 40-minute
+schedule has wide margin under both the 60- and 240-minute windows). A
+failed API call (network/429/auth) raises rather than returning a partial
+list, flowing through the existing error-alert path unchanged. What this
+does *not* cover: a multi-hour ChannelAdvisor/scheduler outage spanning
+several runs isn't retroactively backfilled — same limitation the CSV
+export had; `activity_log`/`daily_summary` are what catch "did the
+scheduler actually run," not this.
+
+`LAST_HOUR_FOLDER`/`LAST_4_HOURS_FOLDER` are kept in `.env` marked legacy,
+unused by the pipeline, for rollback reference only. `sales_pipeline.py`'s
+`run_1h_check`/`run_4h_check` (CSV-file wrappers) and `load_orders_csv`
+are also kept, for the same reason and because existing tests still
+exercise them — the pure counting logic lives in `evaluate_1h`/
+`evaluate_4h`, which both the CSV wrappers and `ca_orders_client`'s rows
+feed into identically.
+
+## Modernization plan — Python replacement (historical — superseded by Phases 1-3 above)
 
 Goal: a scheduled script/service (not something living inside an open
 Excel session) that reproduces the same alerting behavior, with an explicit
@@ -197,5 +262,6 @@ Planned pieces:
 5. **Decide fate of `OldReadLast4Hours`** with the business owner before
    porting (see above) rather than silently dropping or silently keeping it.
 
-Not started yet beyond the notifier — CSV ingestion, config format, and
-scheduling are still VBA-only as of this writing.
+All of the above is now built (Phases 1-3) — see "Data source" above for
+what actually replaced CSV ingestion in the end (the ChannelAdvisor API,
+not the CSV drop originally planned here).

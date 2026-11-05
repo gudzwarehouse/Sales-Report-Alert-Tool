@@ -4,3 +4,4 @@ msoffcrypto-tool
 pytest
 streamlit
 pandas
+httpx

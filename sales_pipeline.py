@@ -28,6 +28,8 @@ import os
 from pathlib import Path
 from typing import Callable
 
+from notifications import render_sales_alert_html
+
 # 0-based column indices, matching the VBA's lettered columns (A, D).
 COL_ORDER_ID = 0
 COL_SUPPLIER_SKU = 3
@@ -124,17 +126,35 @@ def _format_sku_alert_body(threshold: int, matched: list[tuple[str, int]]) -> st
     return "\n".join(lines)
 
 
-def run_1h_check(
-    csv_path: str | Path,
+def _sku_alert_html(title: str, threshold: int, matched: list[tuple[str, int]]) -> str:
+    return render_sales_alert_html(
+        title=title,
+        threshold_label=f"The following SKUs have over {threshold} orders",
+        rows=matched,
+    )
+
+
+def _total_alert_html(title: str, threshold: int, total: int) -> str:
+    return render_sales_alert_html(
+        title=title,
+        threshold_label=f"Total orders are greater than {threshold}",
+        rows=[("Total Orders", total)],
+    )
+
+
+def evaluate_1h(
+    raw_rows: list[dict],
     sku_lookup: dict[str, str],
     config: dict,
     exceptions: set[str],
     send_alert: Callable[..., None],
-    *,
-    delete_after: bool = True,
 ) -> None:
-    """Port of ReadLastHourSKU + ReadLastHour for one Orders Last 1 hour*.csv file."""
-    raw_rows = load_orders_csv(csv_path)
+    """Port of ReadLastHourSKU + ReadLastHour's counting/alerting logic, no I/O.
+
+    ``raw_rows`` is {order_id, supplier_sku} per row -- same shape
+    load_orders_csv produces, so this works identically whether the rows
+    came from a CSV file or ca_orders_client.fetch_recent_order_rows().
+    """
     rows = map_to_our_sku(raw_rows, sku_lookup)
     buckets = config["1h"]
 
@@ -144,6 +164,7 @@ def run_1h_check(
             "CA Sales - Orders last hour",
             _format_sku_alert_body(threshold, matched),
             to=recipients,
+            html_body=_sku_alert_html("CA Sales - Orders last hour", threshold, matched),
         )
 
     total = count_distinct_orders(rows)
@@ -154,8 +175,55 @@ def run_1h_check(
             "CA Sales - Orders last 1 hour",
             f"Total orders are greater than {threshold}\nTotal Orders: {total}",
             to=recipients,
+            html_body=_total_alert_html("CA Sales - Orders last 1 hour", threshold, total),
         )
 
+
+def evaluate_4h(
+    raw_rows: list[dict],
+    sku_lookup: dict[str, str],
+    config: dict,
+    exceptions: set[str],
+    send_alert: Callable[..., None],
+) -> None:
+    """Port of ReadLast4Hours's counting/alerting logic, no I/O (see evaluate_1h)."""
+    rows = map_to_our_sku(raw_rows, sku_lookup)
+    buckets = config["4h"]
+
+    counts = count_by_sku(rows)
+    for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
+        send_alert(
+            "CA Sales - Orders last 4 hours",
+            _format_sku_alert_body(threshold, matched),
+            to=recipients,
+            html_body=_sku_alert_html("CA Sales - Orders last 4 hours", threshold, matched),
+        )
+
+    total = count_distinct_orders(rows)
+    hit = check_total_threshold(total, buckets)
+    if hit is not None:
+        threshold, recipients = hit
+        send_alert(
+            "CA Sales - Orders last 4 hours",
+            f"Total orders are greater than {threshold}\nTotal Orders: {total}",
+            to=recipients,
+            html_body=_total_alert_html("CA Sales - Orders last 4 hours", threshold, total),
+        )
+
+
+def run_1h_check(
+    csv_path: str | Path,
+    sku_lookup: dict[str, str],
+    config: dict,
+    exceptions: set[str],
+    send_alert: Callable[..., None],
+    *,
+    delete_after: bool = True,
+) -> None:
+    """CSV-file wrapper around evaluate_1h -- loads the file, evaluates, then
+    deletes it (matching ReadLastHour's Kill after processing)."""
+    raw_rows = load_orders_csv(csv_path)
+    evaluate_1h(raw_rows, sku_lookup, config, exceptions, send_alert)
     if delete_after:
         os.remove(csv_path)
 
@@ -167,30 +235,9 @@ def run_4h_check(
     exceptions: set[str],
     send_alert: Callable[..., None],
 ) -> None:
-    """Port of ReadLast4Hours for one Orders Last 4 hours*.csv file.
-
-    Does NOT delete the CSV afterwards -- matches ReadLast4Hours's own
-    comment ("don't delete. Need this for the next one") and the decision
-    not to port OldReadLast4Hours (see module docstring).
-    """
+    """CSV-file wrapper around evaluate_4h. Does NOT delete the CSV afterwards
+    -- matches ReadLast4Hours's own comment ("don't delete. Need this for the
+    next one") and the decision not to port OldReadLast4Hours (see module
+    docstring)."""
     raw_rows = load_orders_csv(csv_path)
-    rows = map_to_our_sku(raw_rows, sku_lookup)
-    buckets = config["4h"]
-
-    counts = count_by_sku(rows)
-    for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
-        send_alert(
-            "CA Sales - Orders last 4 hours",
-            _format_sku_alert_body(threshold, matched),
-            to=recipients,
-        )
-
-    total = count_distinct_orders(rows)
-    hit = check_total_threshold(total, buckets)
-    if hit is not None:
-        threshold, recipients = hit
-        send_alert(
-            "CA Sales - Orders last 4 hours",
-            f"Total orders are greater than {threshold}\nTotal Orders: {total}",
-            to=recipients,
-        )
+    evaluate_4h(raw_rows, sku_lookup, config, exceptions, send_alert)
