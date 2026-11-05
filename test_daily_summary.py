@@ -39,6 +39,9 @@ def test_parse_log_lines_empty_input():
         "alerts_sent": 0,
         "alert_subjects": [],
         "failures": [],
+        "alert_times": [],
+        "failure_times": [],
+        "window_peaks": {},
     }
 
 
@@ -55,7 +58,7 @@ def test_render_summary_html_escapes_and_includes_status():
     summary = daily_summary.parse_log_lines(SAMPLE_LINES)
     html = daily_summary.render_summary_html("2026-11-04", summary)
     assert "<html" in html
-    assert "STATUS: FAILURE" in html  # has a failure
+    assert "STATUS: WARNING" in html  # has a failure
     assert "CA Sales - Orders last hour" in html
 
 
@@ -74,10 +77,37 @@ def test_read_today_log_lines_returns_empty_for_missing_file(tmp_path, monkeypat
 def test_render_subject_matches_pipe_keyword_style():
     summary = daily_summary.parse_log_lines(SAMPLE_LINES)
     subject = daily_summary.render_subject("2026-11-04", summary)
-    assert subject == "Sales Report Tool | FAILURE | 11/04 | OP: Veer | Dev: Theekshana"
+    assert subject == "Sales Report Tool | WARNING | 11/04 | OP: Veer | Dev: Theekshana"
 
 
 def test_render_subject_success_when_no_failures():
     summary = daily_summary.parse_log_lines(SAMPLE_LINES[:4])
     subject = daily_summary.render_subject("2026-11-04", summary)
     assert subject == "Sales Report Tool | SUCCESS | 11/04 | OP: Veer | Dev: Theekshana"
+
+
+def test_window_peaks_and_threshold_lines():
+    lines = [
+        "2026-11-05T11:27:14 [INFO] sales_pipeline: [1h] OK on attempt 1: 5 order line(s)",
+        "2026-11-05T11:30:59 [INFO] sales_pipeline: [1h] OK on attempt 1: 17 order line(s)",
+        "2026-11-05T11:31:59 [INFO] sales_pipeline: [4h] OK on attempt 2: 144 order line(s)",
+    ]
+    summary = daily_summary.parse_log_lines(lines)
+    assert summary["window_peaks"] == {"1h": 17, "4h": 144}
+    summary["window_thresholds"] = {"1h": 40, "4h": 120}
+    out = daily_summary.window_lines(summary)
+    assert "1h: peak 17 order line(s) / lowest alert threshold 40 (below threshold)" in out
+    assert "4h: peak 144 order line(s) / lowest alert threshold 120 (alert threshold reached)" in out
+    assert "1h: peak 17" in daily_summary.render_summary_html("2026-11-05", summary)
+
+
+def test_alerts_and_failures_show_uk_time_am_pm():
+    lines = [
+        '2026-11-05T09:05:00 [INFO] sales_pipeline: Alert sent: "A morning" to 3 recipient(s)',
+        '2026-11-05T14:40:00 [INFO] sales_pipeline: Alert sent: "An afternoon" to 3 recipient(s)',
+        "2026-11-05T00:10:00 [ERROR] sales_pipeline: Run FAILED after 1.0s: boom",
+    ]
+    text = daily_summary.render_summary_text("2026-11-05", daily_summary.parse_log_lines(lines))
+    assert "9:05 AM - A morning" in text
+    assert "2:40 PM - An afternoon" in text
+    assert "12:10 AM - Run FAILED after 1.0s: boom" in text

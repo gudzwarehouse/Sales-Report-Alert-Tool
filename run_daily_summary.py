@@ -36,6 +36,14 @@ def main() -> None:
     date_str = datetime.date.today().isoformat()
     lines = daily_summary.read_today_log_lines(date_str)
     summary = daily_summary.parse_log_lines(lines)
+    try:
+        import config_store
+        summary["window_thresholds"] = {
+            window: min(b["total_threshold"] for b in buckets)
+            for window, buckets in config_store.load_thresholds().items() if buckets
+        }
+    except Exception as error:  # noqa: BLE001 - thresholds are optional decoration
+        log(f"[WARN] Could not load thresholds for summary: {error}")
 
     text_body = daily_summary.render_summary_text(date_str, summary)
     html_body = daily_summary.render_summary_html(date_str, summary)
