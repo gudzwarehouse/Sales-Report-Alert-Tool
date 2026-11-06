@@ -179,16 +179,3 @@ def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped") -
                 break
             skip += len(page)
     return rows
-
-
-## fetch_listed_prices (Products endpoint, BuyItNowPrice/RetailPrice) was
-## built here as a price-drop-check fallback baseline for SKUs with no
-## sales-history yet, then removed: confirmed live against 70 real SKUs
-## from a real 4h order window that BuyItNowPrice is unset on effectively
-## the whole catalog (0/70 had it set) and RetailPrice is unreliable
-## (shared placeholder value across unrelated products on some SKUs,
-## lower than the real sold price on others, missing entirely for
-## suffixed SKU variants) -- neither is a usable baseline. The price-drop
-## check (price_check.py) now only compares against yesterday's own real
-## sale price. If a reliable per-SKU reference price source is ever found,
-## this is where a fallback like it would go again.

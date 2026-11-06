@@ -224,3 +224,25 @@ def test_evaluate_1h_no_rows_sends_no_alerts():
     config = {"1h": SKU_BUCKETS}
     evaluate_1h([], {}, config, exceptions=set(), send_alert=lambda *a, **k: sent.append(a))
     assert sent == []
+
+
+def test_alert_items_and_body_include_online_sku():
+    from sales_pipeline import _aggregate_sku_stats, _sku_breach_items, _format_sku_alert_body
+    rows = [
+        {"order_id": "1", "supplier_sku": "AMZ-1", "our_sku": "OUR-1", "title": "Blue Widget"},
+        {"order_id": "2", "supplier_sku": "EBY-1", "our_sku": "OUR-1", "title": "Blue Widget"},
+    ]
+    items = _sku_breach_items([("OUR-1", 2)], _aggregate_sku_stats(rows))
+    assert items[0]["online_sku"] == "AMZ-1, EBY-1"
+    assert "Blue Widget	OUR-1	AMZ-1, EBY-1" in _format_sku_alert_body(1, items)
+
+
+def test_fba_online_skus_are_ignored_in_sku_and_total_counts():
+    from sales_pipeline import evaluate_4h
+    rows = [{"order_id": f"F{i}", "supplier_sku": "FBARIOPAU02(AB)"} for i in range(30)]
+    rows += [{"order_id": "R1", "supplier_sku": "REAL-1"}]
+    sent = []
+    config = {"4h": [{"sku_threshold": 3, "total_threshold": 5, "recipients": EMAIL_ONLY}]}
+    evaluate_4h(rows, {"REAL-1": "OUR-1"}, config, set(),
+                lambda subject, body, *, to, html_body=None: sent.append(subject))
+    assert sent == []  # 30 FBA orders neither trip the SKU nor the total threshold

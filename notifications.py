@@ -21,9 +21,8 @@ SMTP_PORT = 587
 
 
 def _card_css(badge_bg: str, badge_color: str) -> str:
-    """Shared mobile-responsive card CSS for both render_product_breach_html
-    and render_price_drop_html -- identical skeleton, just the badge colors
-    differ per call. Deliberately no `overflow:hidden` on .card -- that
+    """Shared mobile-responsive card CSS for render_product_breach_html --
+    the badge colors differ per call. Deliberately no `overflow:hidden` on .card -- that
     combined with the mobile @media block's layout silently dropped
     rendered values in a real screenshot test (Phase 3), confirmed fixed
     by removing it; don't reintroduce it here."""
@@ -117,7 +116,11 @@ def render_product_breach_html(
         product = escape(str(item.get("title") or item.get("sku") or ""))
         sku = escape(str(item.get("sku") or ""))
         open_tag, close_tag = ("<strong>", "</strong>") if bold else ("", "")
-        sku_line = f'<div class="sku">{sku}</div>' if sku and not bold else ""
+        online_sku = escape(str(item.get("online_sku") or ""))
+        sku_parts = [f"SKU: {sku}"] if sku else []
+        if online_sku:
+            sku_parts.append(f"Online SKU: {online_sku}")
+        sku_line = f'<div class="sku">{" &middot; ".join(sku_parts)}</div>' if sku_parts and not bold else ""
         product_cell = (
             f'<td class="cell"><div class="row-line">'
             f'<span class="mobile-label">Product</span>'
@@ -156,97 +159,6 @@ def render_product_breach_html(
       <tbody>
         {rows_html}
         {totals_html}
-      </tbody>
-    </table>
-    <div class="footer">{escape(footer)}</div>
-  </div>
-</div>
-</body></html>"""
-
-
-def render_price_drop_html(
-    *,
-    severity: str,
-    items: list[dict],
-    footer: str = "This is an automated alert from the Sales Report Tool.",
-) -> str:
-    """Render a price-drop alert -- a sibling to render_product_breach_html
-    (same mobile-responsive card skeleton, see _card_css), with columns for
-    comparing today's price against a baseline instead of order volume.
-
-    ``severity`` is "MEDIUM" or "HIGH" (HIGH when the drop is at least
-    double the configured threshold, see price_check.py's caller).
-    ``items`` is [{"sku", "title", "channels", "baseline_price",
-    "today_price", "pct_drop", "baseline_source"}, ...] -- "baseline_source"
-    is currently always "Yesterday's sale" (the Source column is kept
-    generic/always shown in case another baseline is added later, see
-    run_sales_alerts.py's _run_price_check).
-    """
-    severity = severity.upper()
-    badge_color = "#b91c1c" if severity == "HIGH" else "#b45309"
-    badge_bg = "#fef2f2" if severity == "HIGH" else "#fffbeb"
-
-    def money(value: object) -> str:
-        try:
-            return f"£{float(value):,.2f}"
-        except (TypeError, ValueError):
-            return "£0.00"
-
-    def text_cell_html(label: str, value: str) -> str:
-        return (
-            f'<td class="cell"><div class="row-line">'
-            f'<span class="mobile-label">{escape(label)}</span>'
-            f'<span class="value">{escape(value)}</span>'
-            f'</div></td>'
-        )
-
-    def num_cell_html(label: str, value: str) -> str:
-        return (
-            f'<td class="cell num"><div class="row-line">'
-            f'<span class="mobile-label">{escape(label)}</span>'
-            f'<span class="value">{value}</span>'
-            f'</div></td>'
-        )
-
-    def row_html(item: dict) -> str:
-        product = escape(str(item.get("title") or item.get("sku") or ""))
-        sku = escape(str(item.get("sku") or ""))
-        product_cell = (
-            f'<td class="cell"><div class="row-line">'
-            f'<span class="mobile-label">Product</span>'
-            f'<span class="value">{product}</span>'
-            f'</div><div class="sku">{sku}</div></td>'
-        )
-        pct_drop_text = f"{item.get('pct_drop', 0):.0f}%"
-        return (
-            f'<tr class="row">{product_cell}'
-            f'{text_cell_html("Channel(s)", str(item.get("channels", "") or ""))}'
-            f'{num_cell_html("Baseline", money(item.get("baseline_price", 0)))}'
-            f'{num_cell_html("Today", money(item.get("today_price", 0)))}'
-            f'{num_cell_html("Drop %", pct_drop_text)}'
-            f'{text_cell_html("Source", str(item.get("baseline_source", "") or ""))}'
-            f'</tr>'
-        )
-
-    rows_html = "".join(row_html(item) for item in items)
-
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<style>{_card_css(badge_bg, badge_color)}</style>
-</head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <div class="header">
-      <span class="badge">{escape(severity)}</span>
-      <h1>Price drop detected</h1>
-      <p class="subtitle">Price dropped more than the configured threshold vs. its baseline</p>
-    </div>
-    <table role="presentation">
-      <thead><tr><th>Product</th><th>Channel(s)</th><th class="num">Baseline</th><th class="num">Today</th><th class="num">Drop %</th><th>Source</th></tr></thead>
-      <tbody>
-        {rows_html}
       </tbody>
     </table>
     <div class="footer">{escape(footer)}</div>

@@ -13,10 +13,8 @@ import config_store
 def isolated_config(tmp_path, monkeypatch):
     thresholds_path = tmp_path / "thresholds.json"
     exceptions_path = tmp_path / "exceptions.json"
-    price_check_path = tmp_path / "price_check.json"
     monkeypatch.setattr(config_store, "THRESHOLDS_PATH", thresholds_path)
     monkeypatch.setattr(config_store, "EXCEPTIONS_PATH", exceptions_path)
-    monkeypatch.setattr(config_store, "PRICE_CHECK_PATH", price_check_path)
     return thresholds_path, exceptions_path
 
 
@@ -68,36 +66,3 @@ def test_save_exceptions_dedupes_case_sensitively_and_strips_blanks(isolated_con
     saved = config_store.save_exceptions(["SKU1", "SKU1", "sku1", "  SKU2  ", "", "  "])
     assert saved == ["SKU1", "sku1", "SKU2"]
     assert config_store.load_exceptions() == ["SKU1", "sku1", "SKU2"]
-
-
-VALID_PRICE_CHECK = {
-    "price_drop_threshold_percent": 15,
-    "recipients": ["a@example.com"],
-}
-
-
-def test_save_then_load_price_check_config_round_trips(isolated_config):
-    config_store.save_price_check_config(VALID_PRICE_CHECK)
-    assert config_store.load_price_check_config() == VALID_PRICE_CHECK
-
-
-def test_save_price_check_config_rejects_threshold_outside_0_to_100(isolated_config):
-    bad = {**VALID_PRICE_CHECK, "price_drop_threshold_percent": 0}
-    with pytest.raises(ValueError, match="price_drop_threshold_percent"):
-        config_store.save_price_check_config(bad)
-
-    bad = {**VALID_PRICE_CHECK, "price_drop_threshold_percent": 101}
-    with pytest.raises(ValueError, match="price_drop_threshold_percent"):
-        config_store.save_price_check_config(bad)
-
-
-def test_save_price_check_config_rejects_empty_recipients(isolated_config):
-    bad = {**VALID_PRICE_CHECK, "recipients": []}
-    with pytest.raises(ValueError, match="recipient"):
-        config_store.save_price_check_config(bad)
-
-
-def test_save_price_check_config_rejects_malformed_email(isolated_config):
-    bad = {**VALID_PRICE_CHECK, "recipients": ["not-an-email"]}
-    with pytest.raises(ValueError, match="invalid recipient"):
-        config_store.save_price_check_config(bad)

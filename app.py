@@ -12,10 +12,15 @@ Run via run_ui.bat, or directly: streamlit run app.py
 
 from __future__ import annotations
 
+import hmac
+import os
+
 import pandas as pd
 import streamlit as st
+from dotenv import load_dotenv
 
 import config_store
+from sales_pipeline import IGNORED_ONLINE_SKU_PREFIXES
 
 st.set_page_config(page_title="Sales Report Tool", layout="wide", initial_sidebar_state="collapsed")
 
@@ -62,6 +67,30 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+load_dotenv(".env", override=True)
+
+
+def _require_passcode() -> None:
+    """Lock the whole UI behind UI_PASSCODE from .env. Fails closed: no passcode
+    configured means nobody gets in (the editor can change who gets alerts)."""
+    expected = os.getenv("UI_PASSCODE", "").strip()
+    if not expected:
+        st.error("UI is locked: UI_PASSCODE is not set in .env.")
+        st.stop()
+    if st.session_state.get("unlocked"):
+        return
+    st.title("Sales Report Tool")
+    entered = st.text_input("Passcode", type="password", key="passcode_input")
+    if entered:
+        if hmac.compare_digest(entered.encode(), expected.encode()):
+            st.session_state["unlocked"] = True
+            st.rerun()
+        st.error("Wrong passcode.")
+    st.stop()
+
+
+_require_passcode()
+
 st.title("Sales Report Tool")
 st.markdown('<div class="subtitle">Thresholds, alert recipients, and excluded SKUs for the CA sales-alert pipeline.</div>', unsafe_allow_html=True)
 
@@ -76,8 +105,8 @@ def _parse_recipients(text: str) -> list[str]:
     return [line.strip() for line in text.splitlines() if line.strip()]
 
 
-tab_thresholds, tab_price_check, tab_exceptions, tab_overview = st.tabs(
-    ["Thresholds & recipients", "Price-drop check", "Excluded SKUs", "Project overview"]
+tab_thresholds, tab_exceptions, tab_overview = st.tabs(
+    ["Thresholds & recipients", "Excluded SKUs", "Project overview"]
 )
 
 with tab_thresholds:
@@ -133,52 +162,26 @@ with tab_thresholds:
                     except ValueError as error:
                         st.error(str(error))
 
-with tab_price_check:
-    st.subheader("Price-drop check")
-    st.markdown(
-        '<div class="subtitle">Flags a SKU whose lowest sale price today has dropped more than this percentage '
-        "vs. its baseline (yesterday's own lowest sale, or ChannelAdvisor's listed price for a brand-new SKU with "
-        "no sales history yet) -- catches a mispriced listing being bulk-bought. Runs every ~40 minutes alongside "
-        "the order-count checks, and deliberately ignores the Excluded SKUs list on the next tab: a price mistake "
-        "can happen on any SKU.</div>",
-        unsafe_allow_html=True,
-    )
-    try:
-        price_check_config = config_store.load_price_check_config()
-    except Exception as error:  # noqa: BLE001
-        st.error(f"Could not load config/price_check.json: {error}")
-        price_check_config = None
-
-    if price_check_config is not None:
-        with st.form(key="form_price_check"):
-            threshold_percent = st.number_input(
-                "Price drop threshold (%)",
-                min_value=1, max_value=100,
-                value=int(price_check_config["price_drop_threshold_percent"]),
-            )
-            recipients_text = st.text_area(
-                "Recipients (one address per line)",
-                value=_recipients_text(price_check_config["recipients"]),
-                height=150,
-            )
-            saved = st.form_submit_button("Save changes", type="primary")
-            if saved:
-                updated = {
-                    "price_drop_threshold_percent": int(threshold_percent),
-                    "recipients": _parse_recipients(recipients_text),
-                }
-                try:
-                    config_store.save_price_check_config(updated)
-                    st.success("Saved price-drop check settings.")
-                    st.rerun()
-                except ValueError as error:
-                    st.error(str(error))
-
 with tab_exceptions:
     st.subheader("Excluded SKUs")
     st.markdown(
         '<div class="subtitle">SKUs listed here never trigger an alert, no matter how high their order count is.</div>',
         unsafe_allow_html=True,
+    )
+    st.markdown(
+        '<div style="color:#b91c1c;font-weight:700;margin:4px 0 12px;">'
+        "Must be OUR SKU (OURSKU, column D of StockFeeds.xlsm Inventory) &mdash; NOT the online / marketplace SKU "
+        "(e.g. use RIOPAU04, not 21700 or FBARIOPAU02(AB)). An online SKU here will never match, so that product "
+        "would still trigger alerts."
+        "</div>",
+        unsafe_allow_html=True,
+    )
+    prefixes = ", ".join(f"`{p}*`" for p in IGNORED_ONLINE_SKU_PREFIXES)
+    st.info(
+        f"Also ignored automatically (no need to list them here): any order whose online SKU starts with "
+        f"{prefixes} (e.g. FBARIOPAU02(AB)) — Amazon-fulfilled listings. They are left out of every "
+        "per-product alert and out of the total-order counts.",
+        icon=None,
     )
     try:
         exceptions = config_store.load_exceptions()

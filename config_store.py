@@ -15,7 +15,6 @@ BASE_DIR = Path(__file__).resolve().parent
 CONFIG_DIR = BASE_DIR / "config"
 THRESHOLDS_PATH = CONFIG_DIR / "thresholds.json"
 EXCEPTIONS_PATH = CONFIG_DIR / "exceptions.json"
-PRICE_CHECK_PATH = CONFIG_DIR / "price_check.json"
 
 WINDOWS = ("1h", "4h")
 _EMAIL_RE = re.compile(r"[^\s@]+@[^\s@]+\.[^\s@]+")
@@ -50,30 +49,6 @@ def validate_thresholds(data: dict) -> None:
 def save_thresholds(data: dict) -> None:
     validate_thresholds(data)
     THRESHOLDS_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
-
-
-def load_price_check_config() -> dict:
-    return json.loads(PRICE_CHECK_PATH.read_text(encoding="utf-8"))
-
-
-def validate_price_check_config(data: dict) -> None:
-    """Raise ValueError with a human-readable message if data is malformed."""
-    if not isinstance(data, dict):
-        raise ValueError("Price check config must be an object")
-    percent = data.get("price_drop_threshold_percent")
-    if not isinstance(percent, (int, float)) or isinstance(percent, bool) or not (0 < percent <= 100):
-        raise ValueError("price_drop_threshold_percent must be a number greater than 0 and at most 100")
-    recipients = data.get("recipients")
-    if not isinstance(recipients, list) or not recipients:
-        raise ValueError("price_check: must have at least one recipient")
-    for address in recipients:
-        if not isinstance(address, str) or not _EMAIL_RE.fullmatch(address.strip()):
-            raise ValueError(f"price_check: invalid recipient address: {address!r}")
-
-
-def save_price_check_config(data: dict) -> None:
-    validate_price_check_config(data)
-    PRICE_CHECK_PATH.write_text(json.dumps(data, indent=2) + "\n", encoding="utf-8")
 
 
 def load_exceptions() -> list[str]:

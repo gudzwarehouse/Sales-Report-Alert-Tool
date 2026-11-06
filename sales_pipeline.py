@@ -58,6 +58,18 @@ def load_orders_csv(path: str | Path) -> list[dict]:
     return rows
 
 
+# Online SKUs starting with these are ignored everywhere (per-SKU AND total
+# alerts): FBA* listings are Amazon-fulfilled, not shipped from our warehouse.
+IGNORED_ONLINE_SKU_PREFIXES = ("FBA",)
+
+
+def drop_ignored_online_skus(rows: list[dict]) -> list[dict]:
+    return [
+        row for row in rows
+        if not str(row.get("supplier_sku") or "").upper().startswith(IGNORED_ONLINE_SKU_PREFIXES)
+    ]
+
+
 def map_to_our_sku(rows: list[dict], sku_lookup: dict[str, str]) -> list[dict]:
     """Attach our_sku to each row via the lookup; unmatched rows get "" (VBA leaves the cell blank)."""
     return [
@@ -131,17 +143,25 @@ def _aggregate_sku_stats(rows: list[dict]) -> dict[str, dict]:
     stats: dict[str, dict] = {}
     for row in rows:
         sku = row["our_sku"]
-        entry = stats.setdefault(sku, {"title": "", "quantity": 0, "sales_value": 0.0, "channels": Counter()})
+        entry = stats.setdefault(sku, {"title": "", "quantity": 0, "sales_value": 0.0, "channels": Counter(), "online_skus": {}})
         qty = row.get("quantity") or 1
         price = row.get("unit_price") or 0.0
         entry["quantity"] += qty
         entry["sales_value"] += qty * price
         if not entry["title"] and row.get("title"):
             entry["title"] = row["title"]
+        online_sku = row.get("supplier_sku")
+        if online_sku:
+            entry["online_skus"][online_sku] = True  # ordered set
         channel = row.get("channel")
         if channel:
             entry["channels"][channel] += 1
     return stats
+
+
+def _format_online_skus(entry: dict) -> str:
+    """Marketplace/listing SKU(s) as sold online (ChannelAdvisor item Sku), comma-joined."""
+    return ", ".join(entry.get("online_skus", {}))
 
 
 def _format_channels(channels: Counter) -> str:
@@ -168,6 +188,7 @@ def _sku_breach_items(matched: list[tuple[str, int]], stats: dict[str, dict]) ->
             "quantity": s["quantity"],
             "sales_value": s["sales_value"],
             "channels": _format_channels(s["channels"]),
+            "online_sku": _format_online_skus(s),
         })
     return items
 
@@ -180,7 +201,7 @@ def _window_breakdown_items(counts: dict[str, int], stats: dict[str, dict], *, l
     items = [
         {"sku": sku, "title": s["title"] or sku, "orders": counts.get(sku, 0),
          "quantity": s["quantity"], "sales_value": s["sales_value"],
-         "channels": _format_channels(s["channels"])}
+         "channels": _format_channels(s["channels"]), "online_sku": _format_online_skus(s)}
         for sku, s in stats.items() if sku
     ]
     items.sort(key=lambda item: item["quantity"], reverse=True)
@@ -196,10 +217,10 @@ def _window_totals(stats: dict[str, dict], total_orders: int) -> dict:
 
 
 def _format_sku_alert_body(threshold: int, items: list[dict]) -> str:
-    lines = [f"The following SKUs have over {threshold} orders", "", "Product\tSKU\tChannel(s)\tOrders\tQty\tSales"]
+    lines = [f"The following SKUs have over {threshold} orders", "", "Product\tSKU\tOnline SKU\tChannel(s)\tOrders\tQty\tSales"]
     for item in items:
         lines.append(
-            f"{item['title']}\t{item['sku']}\t{item.get('channels', '')}\t{item['orders']}\t"
+            f"{item['title']}\t{item['sku']}\t{item.get('online_sku', '')}\t{item.get('channels', '')}\t{item['orders']}\t"
             f"{item['quantity']}\t£{item['sales_value']:.2f}"
         )
     return "\n".join(lines)
@@ -213,11 +234,11 @@ def _format_total_alert_body(threshold: int, total: int, totals: dict, items: li
         f"Total Sales Value: £{totals['sales_value']:.2f}",
         "",
         "Top products in this window:",
-        "Product\tSKU\tChannel(s)\tOrders\tQty\tSales",
+        "Product\tSKU\tOnline SKU\tChannel(s)\tOrders\tQty\tSales",
     ]
     for item in items:
         lines.append(
-            f"{item['title']}\t{item['sku']}\t{item.get('channels', '')}\t{item['orders']}\t"
+            f"{item['title']}\t{item['sku']}\t{item.get('online_sku', '')}\t{item.get('channels', '')}\t{item['orders']}\t"
             f"{item['quantity']}\t£{item['sales_value']:.2f}"
         )
     return "\n".join(lines)
@@ -236,7 +257,7 @@ def evaluate_1h(
     load_orders_csv produces, so this works identically whether the rows
     came from a CSV file or ca_orders_client.fetch_recent_order_rows().
     """
-    rows = map_to_our_sku(raw_rows, sku_lookup)
+    rows = map_to_our_sku(drop_ignored_online_skus(raw_rows), sku_lookup)
     buckets = config["1h"]
     stats = _aggregate_sku_stats(rows)
 
@@ -285,7 +306,7 @@ def evaluate_4h(
     send_alert: Callable[..., None],
 ) -> None:
     """Port of ReadLast4Hours's counting/alerting logic, no I/O (see evaluate_1h)."""
-    rows = map_to_our_sku(raw_rows, sku_lookup)
+    rows = map_to_our_sku(drop_ignored_online_skus(raw_rows), sku_lookup)
     buckets = config["4h"]
     stats = _aggregate_sku_stats(rows)
 

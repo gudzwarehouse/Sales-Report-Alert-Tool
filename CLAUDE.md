@@ -234,7 +234,7 @@ exercise them — the pure counting logic lives in `evaluate_1h`/
 `evaluate_4h`, which both the CSV wrappers and `ca_orders_client`'s rows
 feed into identically.
 
-## Sales channel per order, and price-drop detection (Phases 3b/4)
+## Sales channel per order (Phase 3b)
 
 **Channel tracking**: `ca_orders_client.fetch_recent_order_rows` also
 captures `SiteName` as `channel` per row (real values seen: `"Amazon UK"`,
@@ -243,40 +243,9 @@ captures `SiteName` as `channel` per row (real values seen: `"Amazon UK"`,
 `Channel(s)` column (e.g. `"Amazon UK (3), Temu UK (1)"`) in every
 threshold-breach email.
 
-**Price-drop detection** (the actual business purpose behind this whole
-tool, per the business owner: catch a mispriced listing before it gets
-exploited by bulk-buying): runs every cycle alongside the 1h/4h checks in
-`run_sales_alerts.py` (not a separate script) — flags a SKU whose lowest
-sale price today has dropped more than `config/price_check.json`'s
-`price_drop_threshold_percent` (default 15%) below a baseline, and
-**deliberately ignores `config/exceptions.json`** — a price mistake can
-happen on any SKU.
-
-**Baseline: the last price ever recorded for that SKU, whenever that
-was** — `price_tracking.py`'s single persistent CSV,
-`config/price_tracking.csv` (columns `sku, unit_price, last_updated_date`),
-updated by `price_check.check_and_update_price_tracking` every run:
-- No record yet for a SKU → nothing to compare against, just record
-  today's price as the new baseline.
-- A record exists, dated before today → this is the first sighting of
-  this SKU today, so compare today's price against the stored price;
-  flag if the drop is over threshold. Record gets overwritten with
-  today's price/date either way.
-- A record already dated today → already checked once today, skip the
-  comparison (this doubles as the same-day dedup, no separate ledger
-  file needed) but still keep the *lowest* price seen today in the
-  record.
-
-**ChannelAdvisor's `BuyItNowPrice`/`RetailPrice` were tried as a baseline
-and dropped** — confirmed live (70 real SKUs from a real 4h order window)
-that `BuyItNowPrice` is unset on effectively the entire catalog (0/70 had
-it set) and `RetailPrice` is unreliable (a shared placeholder value
-across unrelated products on some SKUs, lower than the real sold price on
-others, missing entirely for suffixed SKU variants). Neither field is
-trustworthy, so the check only ever compares real transaction data against
-other real transaction data. A SKU with no prior recorded price at all
-(never sold before) isn't covered by this check yet — same gap the
-original VBA/CSV pipeline had, not a new regression.
+**Price-drop detection was removed** (feature, config, UI tab and email
+deleted entirely: `price_check.py`, `price_tracking.py`, `config/price_check.json`).
+Recoverable from git history if ever wanted again.
 
 ## Modernization plan — Python replacement (historical — superseded by Phases 1-3 above)
 
