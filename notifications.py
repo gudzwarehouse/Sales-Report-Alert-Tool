@@ -20,39 +20,6 @@ SMTP_HOST = "smtp.gmail.com"
 SMTP_PORT = 587
 
 
-def _card_css(badge_bg: str, badge_color: str) -> str:
-    """Shared mobile-responsive card CSS for render_product_breach_html --
-    the badge colors differ per call. Deliberately no `overflow:hidden` on .card -- that
-    combined with the mobile @media block's layout silently dropped
-    rendered values in a real screenshot test (Phase 3), confirmed fixed
-    by removing it; don't reintroduce it here."""
-    return f"""
-  body {{ margin:0; padding:0; background:#f3f4f6; }}
-  .wrap {{ max-width:640px; margin:0 auto; padding:20px; font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif; color:#1f2937; }}
-  .card {{ background:#ffffff; border-radius:10px; border:1px solid #e5e7eb; }}
-  .header {{ padding:20px 20px 16px; border-bottom:1px solid #e5e7eb; }}
-  .badge {{ display:inline-block; padding:4px 12px; border-radius:999px; font-size:12px; font-weight:700; letter-spacing:.03em; background:{badge_bg}; color:{badge_color}; }}
-  h1 {{ font-size:18px; margin:10px 0 4px; color:#111827; }}
-  .subtitle {{ font-size:13px; color:#6b7280; margin:0; }}
-  table {{ width:100%; border-collapse:collapse; }}
-  thead th {{ text-align:left; font-size:11px; text-transform:uppercase; letter-spacing:.04em; color:#6b7280; padding:10px 20px; border-bottom:1px solid #e5e7eb; }}
-  thead th.num, td.num {{ text-align:right; }}
-  td.cell {{ padding:12px 20px; border-bottom:1px solid #f3f4f6; font-size:14px; }}
-  .mobile-label {{ display:none; }}
-  .sku {{ font-size:11px; color:#9ca3af; margin-top:2px; }}
-  .totals td {{ background:#f9fafb; border-top:2px solid #e5e7eb; border-bottom:none; }}
-  .footer {{ padding:14px 20px; font-size:12px; color:#9ca3af; }}
-  @media (max-width:480px) {{
-    thead {{ display:none; }}
-    table, tbody, tr {{ display:block; width:100%; }}
-    tr.row {{ padding:8px 20px; border-bottom:1px solid #f3f4f6; }}
-    td.cell {{ display:block; border:none; padding:3px 0; }}
-    .row-line {{ display:flex; justify-content:space-between; align-items:baseline; }}
-    .mobile-label {{ display:inline-block; font-size:11px; text-transform:uppercase; letter-spacing:.03em; color:#9ca3af; }}
-  }}
-"""
-
-
 def render_product_breach_html(
     *,
     title: str,
@@ -63,11 +30,8 @@ def render_product_breach_html(
     footer: str = "This is an automated alert from the Sales Report Tool.",
 ) -> str:
     """Render a threshold-breach alert with a per-product breakdown (name,
-    SKU, order count, quantity sold, sales value), mobile-responsive --
-    the table collapses into stacked label/value rows below 480px via the
-    @media block, since most mobile mail clients (Gmail/Apple Mail apps)
-    honor <style> media queries even though Outlook desktop doesn't (it
-    just falls back to the plain table, which still reads fine).
+    SKU, order count, quantity sold, sales value), mobile-responsive
+    by construction (fluid stacked blocks, inline styles only).
 
     ``severity`` is "MEDIUM" or "HIGH" -- MEDIUM is the lower threshold
     bucket, HIGH is the bucket that also fires the Zapier SMS/phone-call
@@ -90,78 +54,62 @@ def render_product_breach_html(
         except (TypeError, ValueError):
             return "£0.00"
 
-    def cell_html(label: str, value: str, *, bold: bool = False) -> str:
-        # Real inline elements, not ::before/float -- those render unreliably
-        # once an ancestor clips overflow (confirmed: Chromium's full-page
-        # screenshot silently dropped floated pseudo-content here, even
-        # though the element was genuinely laid out correctly in isolation).
-        open_tag, close_tag = ("<strong>", "</strong>") if bold else ("", "")
+    # Everything is inline-styled and fluid (no @media, no <style> dependency):
+    # many mobile mail apps (e.g. Gmail app with non-Google accounts) strip
+    # <style> blocks, so each product is a stacked block -- name/SKU/channels
+    # on top, then a 3-column Orders/Qty/Sales strip -- that fits any width.
+    def stat(label: str, value: str, bold: bool) -> str:
+        weight = "700" if bold else "600"
         return (
-            f'<td class="cell num"><div class="row-line">'
-            f'<span class="mobile-label">{escape(label)}</span>'
-            f'<span class="value">{open_tag}{value}{close_tag}</span>'
-            f'</div></td>'
+            '<td width="33%" valign="top" style="padding:0 4px 0 0;">'
+            f'<div style="font-size:11px;text-transform:uppercase;letter-spacing:.03em;color:#9ca3af;">{escape(label)}</div>'
+            f'<div style="font-size:15px;font-weight:{weight};color:#111827;">{value}</div></td>'
         )
 
-    def channel_cell_html(channels: str, *, bold: bool = False) -> str:
-        open_tag, close_tag = ("<strong>", "</strong>") if bold else ("", "")
-        return (
-            f'<td class="cell"><div class="row-line">'
-            f'<span class="mobile-label">Channel(s)</span>'
-            f'<span class="value">{open_tag}{escape(channels)}{close_tag}</span>'
-            f'</div></td>'
-        )
-
-    def row_html(item: dict, *, row_class: str = "row", bold: bool = False) -> str:
+    def item_html(item: dict, *, totals_row: bool = False) -> str:
         product = escape(str(item.get("title") or item.get("sku") or ""))
         sku = escape(str(item.get("sku") or ""))
-        open_tag, close_tag = ("<strong>", "</strong>") if bold else ("", "")
         online_sku = escape(str(item.get("online_sku") or ""))
+        channels = escape(str(item.get("channels", "") or ""))
         sku_parts = [f"SKU: {sku}"] if sku else []
         if online_sku:
             sku_parts.append(f"Online SKU: {online_sku}")
-        sku_line = f'<div class="sku">{" &middot; ".join(sku_parts)}</div>' if sku_parts and not bold else ""
-        product_cell = (
-            f'<td class="cell"><div class="row-line">'
-            f'<span class="mobile-label">Product</span>'
-            f'<span class="value">{open_tag}{product}{close_tag}</span>'
-            f'</div>{sku_line}</td>'
-        )
+        detail = ""
+        if sku_parts and not totals_row:
+            detail += f'<div style="font-size:12px;color:#9ca3af;margin-top:2px;word-break:break-all;">{" &middot; ".join(sku_parts)}</div>'
+        if channels:
+            detail += f'<div style="font-size:12px;color:#6b7280;margin-top:2px;">{channels}</div>'
+        bg = "#f9fafb" if totals_row else "#ffffff"
+        top = "2px solid #e5e7eb" if totals_row else "0"
         return (
-            f'<tr class="{row_class}">{product_cell}'
-            f'{channel_cell_html(str(item.get("channels", "") or ""), bold=bold)}'
-            f'{cell_html("Orders", escape(str(item.get("orders", ""))), bold=bold)}'
-            f'{cell_html("Qty", escape(str(item.get("quantity", ""))), bold=bold)}'
-            f'{cell_html("Sales", escape(money(item.get("sales_value", 0))), bold=bold)}'
-            f'</tr>'
+            f'<div style="padding:14px 16px;border-bottom:1px solid #f3f4f6;border-top:{top};background:{bg};">'
+            f'<div style="font-size:14px;font-weight:{"700" if totals_row else "600"};color:#111827;word-wrap:break-word;overflow-wrap:anywhere;">{product}</div>'
+            f'{detail}'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin-top:10px;border-collapse:collapse;"><tr>'
+            f'{stat("Orders", escape(str(item.get("orders", ""))), totals_row)}'
+            f'{stat("Qty", escape(str(item.get("quantity", ""))), totals_row)}'
+            f'{stat("Sales", escape(money(item.get("sales_value", 0))), totals_row)}'
+            '</tr></table></div>'
         )
 
-    rows_html = "".join(row_html(item) for item in items)
-    totals_html = ""
-    if totals is not None:
-        totals_html = row_html({**totals, "title": "Total"}, row_class="row totals", bold=True)
+    rows_html = "".join(item_html(item) for item in items)
+    totals_html = item_html({**totals, "title": "Total"}, totals_row=True) if totals is not None else ""
 
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<style>{_card_css(badge_bg, badge_color)}</style>
 </head>
-<body>
-<div class="wrap">
-  <div class="card">
-    <div class="header">
-      <span class="badge">{escape(severity)}</span>
-      <h1>{escape(title)}</h1>
-      <p class="subtitle">{escape(subtitle)}</p>
+<body style="margin:0;padding:0;background:#f3f4f6;">
+<div style="max-width:640px;margin:0 auto;padding:12px;font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;">
+  <div style="background:#ffffff;border-radius:10px;border:1px solid #e5e7eb;">
+    <div style="padding:16px;border-bottom:1px solid #e5e7eb;">
+      <span style="display:inline-block;padding:4px 12px;border-radius:999px;font-size:12px;font-weight:700;letter-spacing:.03em;background:{badge_bg};color:{badge_color};">{escape(severity)}</span>
+      <h1 style="font-size:18px;margin:10px 0 4px;color:#111827;">{escape(title)}</h1>
+      <p style="font-size:13px;color:#6b7280;margin:0;">{escape(subtitle)}</p>
     </div>
-    <table role="presentation">
-      <thead><tr><th>Product</th><th>Channel(s)</th><th class="num">Orders</th><th class="num">Qty</th><th class="num">Sales</th></tr></thead>
-      <tbody>
-        {rows_html}
-        {totals_html}
-      </tbody>
-    </table>
-    <div class="footer">{escape(footer)}</div>
+    {rows_html}
+    {totals_html}
+    <div style="padding:14px 16px;font-size:12px;color:#9ca3af;">{escape(footer)}</div>
   </div>
 </div>
 </body></html>"""
@@ -172,7 +120,7 @@ def render_error_html(*, source: str, message: str) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;line-height:1.5;margin:0;padding:20px;background:#ffffff;">
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;line-height:1.5;margin:0;padding:12px;background:#ffffff;">
 <div style="max-width:600px;margin:0 auto;">
 <div style="border-bottom:2px solid #e5e7eb;padding-bottom:12px;margin-bottom:16px;">
 <h2 style="margin:0 0 6px;color:#b91c1c;">Error in CA Sales Reports</h2>

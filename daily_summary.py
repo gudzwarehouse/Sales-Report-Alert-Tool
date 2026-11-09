@@ -169,7 +169,7 @@ def render_summary_html(date_str: str, summary: dict) -> str:
         windows_section = (
             '<div style="margin-top:16px;"><div style="font-size:11px;font-weight:700;'
             'letter-spacing:.04em;text-transform:uppercase;color:#6b7280;margin-bottom:6px;">'
-            "Order volume checked today</div><ul style=\"margin:0;padding-left:20px;color:#1f2937;\">"
+            "Order volume checked today</div><ul style=\"margin:0;padding-left:20px;color:#1f2937;word-wrap:break-word;overflow-wrap:anywhere;\">"
             + "".join(f"<li>{escape(w)}</li>" for w in window_lines(summary))
             + "</ul></div>"
         )
@@ -179,7 +179,7 @@ def render_summary_html(date_str: str, summary: dict) -> str:
         alerts_section = (
             '<div style="margin-top:16px;"><div style="font-size:11px;font-weight:700;'
             'letter-spacing:.04em;text-transform:uppercase;color:#6b7280;margin-bottom:6px;">'
-            "Alerts sent today (UK time)</div><ul style=\"margin:0;padding-left:20px;color:#1f2937;\">"
+            "Alerts sent today (UK time)</div><ul style=\"margin:0;padding-left:20px;color:#1f2937;word-wrap:break-word;overflow-wrap:anywhere;\">"
             + "".join(f"<li>{escape(timed(t, s))}</li>" for t, s in zip(summary["alert_times"], summary["alert_subjects"]))
             + "</ul></div>"
         )
@@ -197,14 +197,14 @@ def render_summary_html(date_str: str, summary: dict) -> str:
     return f"""<!DOCTYPE html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1"></head>
-<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;line-height:1.5;margin:0;padding:20px;background:#ffffff;">
+<body style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,Helvetica,Arial,sans-serif;color:#1f2937;line-height:1.5;margin:0;padding:12px;background:#ffffff;">
 <div style="max-width:600px;margin:0 auto;">
 <div style="border-bottom:2px solid #e5e7eb;padding-bottom:12px;margin-bottom:16px;">
 <h2 style="margin:0 0 6px;color:#111827;">Sales Report Tool -- daily summary</h2>
 <div style="font-size:13px;color:#6b7280;">{escape(date_str)}</div>
 <div style="margin-top:8px;"><span style="background:{status_color};color:#ffffff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">STATUS: {status_text}</span></div>
 </div>
-<table style="width:100%;border-collapse:collapse;font-size:14px;">{stats_rows}</table>
+<table role="presentation" width="100%" style="width:100%;border-collapse:collapse;font-size:14px;">{stats_rows}</table>
 {windows_section}
 {alerts_section}
 {failures_section}
