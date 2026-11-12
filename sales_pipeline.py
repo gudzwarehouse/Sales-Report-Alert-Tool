@@ -193,21 +193,6 @@ def _sku_breach_items(matched: list[tuple[str, int]], stats: dict[str, dict]) ->
     return items
 
 
-def _window_breakdown_items(counts: dict[str, int], stats: dict[str, dict], *, limit: int = 10) -> list[dict]:
-    """Top SKUs by quantity across the whole window, for the total-threshold
-    alert's product breakdown (that alert is about overall volume, not one
-    SKU, so it shows what's actually driving the number instead of just the
-    total)."""
-    items = [
-        {"sku": sku, "title": s["title"] or sku, "orders": counts.get(sku, 0),
-         "quantity": s["quantity"], "sales_value": s["sales_value"],
-         "channels": _format_channels(s["channels"]), "online_sku": _format_online_skus(s)}
-        for sku, s in stats.items() if sku
-    ]
-    items.sort(key=lambda item: item["quantity"], reverse=True)
-    return items[:limit]
-
-
 def _window_totals(stats: dict[str, dict], total_orders: int) -> dict:
     return {
         "orders": total_orders,
@@ -226,22 +211,13 @@ def _format_sku_alert_body(threshold: int, items: list[dict]) -> str:
     return "\n".join(lines)
 
 
-def _format_total_alert_body(threshold: int, total: int, totals: dict, items: list[dict]) -> str:
-    lines = [
+def _format_total_alert_body(threshold: int, total: int, totals: dict) -> str:
+    return "\n".join([
         f"Total orders are greater than {threshold}",
         f"Total Orders: {total}",
         f"Total Quantity: {totals['quantity']}",
         f"Total Sales Value: £{totals['sales_value']:.2f}",
-        "",
-        "Top products in this window:",
-        "Product\tSKU\tOnline SKU\tChannel(s)\tOrders\tQty\tSales",
-    ]
-    for item in items:
-        lines.append(
-            f"{item['title']}\t{item['sku']}\t{item.get('online_sku', '')}\t{item.get('channels', '')}\t{item['orders']}\t"
-            f"{item['quantity']}\t£{item['sales_value']:.2f}"
-        )
-    return "\n".join(lines)
+    ])
 
 
 def evaluate_1h(
@@ -282,17 +258,16 @@ def evaluate_1h(
     if hit is not None:
         threshold, recipients = hit
         severity = _severity_for_threshold(threshold, buckets, "total_threshold")
-        breakdown = _window_breakdown_items(counts, stats)
         totals = _window_totals(stats, total)
         send_alert(
             f"[1h TH] [{severity}] CA Sales - Orders last 1 hour (Total: {total})",
-            _format_total_alert_body(threshold, total, totals, breakdown),
+            _format_total_alert_body(threshold, total, totals),
             to=recipients,
             html_body=render_product_breach_html(
                 title="Orders last 1 hour -- Total threshold breach",
                 severity=severity,
                 subtitle=f"Total orders are greater than {threshold} (actual: {total})",
-                items=breakdown,
+                items=[],
                 totals=totals,
             ),
         )
@@ -331,17 +306,16 @@ def evaluate_4h(
     if hit is not None:
         threshold, recipients = hit
         severity = _severity_for_threshold(threshold, buckets, "total_threshold")
-        breakdown = _window_breakdown_items(counts, stats)
         totals = _window_totals(stats, total)
         send_alert(
             f"[4h TH] [{severity}] CA Sales - Orders last 4 hours (Total: {total})",
-            _format_total_alert_body(threshold, total, totals, breakdown),
+            _format_total_alert_body(threshold, total, totals),
             to=recipients,
             html_body=render_product_breach_html(
                 title="Orders last 4 hours -- Total threshold breach",
                 severity=severity,
                 subtitle=f"Total orders are greater than {threshold} (actual: {total})",
-                items=breakdown,
+                items=[],
                 totals=totals,
             ),
         )
