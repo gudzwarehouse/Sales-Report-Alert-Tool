@@ -79,10 +79,14 @@ def map_to_our_sku(rows: list[dict], sku_lookup: dict[str, str]) -> list[dict]:
 
 
 def count_by_sku(rows: list[dict]) -> dict[str, int]:
-    """our_sku (including "" for unmatched) -> order count, matching the AdvancedFilter+COUNTIF pair."""
+    """our_sku -> order count. Rows with no our_sku (unmatched in the lookup)
+    are NOT pooled into a blank group -- they can't trigger a per-SKU alert,
+    but still count toward the total-orders check."""
     counts: dict[str, int] = {}
     for row in rows:
         sku = row["our_sku"]
+        if not sku:
+            continue
         counts[sku] = counts.get(sku, 0) + 1
     return counts
 
