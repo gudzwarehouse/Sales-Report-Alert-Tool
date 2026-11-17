@@ -215,10 +215,20 @@ periodically," not a strict rolling time slice. `fetch_recent_order_rows`
 reproduces that directly: `CreatedDateUtc` in the trailing window **and**
 `ShippingStatus eq 'Unshipped'`.
 
-**No incremental watermark** — every run re-queries its own full trailing
-window from "now," so a late/skipped scheduled run is self-healing as long
-as the next run happens before the window rolls past it (the 40-minute
-schedule has wide margin under both the 60- and 240-minute windows). A
+**Windows are hour-aligned, not realtime-trailing** — `fetch_recent_order_rows`
+ends its window at the last completed hour boundary (UTC, which is also
+GB-local since GMT/BST are both whole-hour offsets), not the exact instant
+the scheduler fired. A run at 13:40 reports 12:00-13:00 for the 1h window
+and 09:00-13:00 for the 4h window, not "the last 60/240 minutes as of
+13:40." This makes each alert read as a clean hourly slot instead of an
+arbitrary realtime cutoff, matching what the business actually wants to
+see ("orders in the 12-1 slot").
+
+**No incremental watermark** — every run re-queries its own full window
+from that aligned boundary, so a late/skipped scheduled run is self-healing
+as long as the next run happens before the window rolls past it (the
+40-minute schedule has wide margin under both the 60- and 240-minute
+windows). A
 failed API call (network/429/auth) raises rather than returning a partial
 list, flowing through the existing error-alert path unchanged. What this
 does *not* cover: a multi-hour ChannelAdvisor/scheduler outage spanning

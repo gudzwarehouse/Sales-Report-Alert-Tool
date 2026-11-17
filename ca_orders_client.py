@@ -14,11 +14,15 @@ GET-only, per CLAUDE.md's hard rule -- the only POST here is the OAuth
 token exchange itself (an auth handshake, not a ChannelAdvisor data
 mutation), never a call against the Orders endpoint.
 
-No incremental watermark: every call re-queries its own full trailing
-window from "now". A late/skipped scheduled run is self-healing as long as
-the next run happens before the window rolls past it (run_sales_alerts.py
-runs every 40 min; the 1h/4h windows give 20/200 minutes of margin). What
-this does NOT cover is a multi-hour ChannelAdvisor/scheduler outage -- that
+No incremental watermark: every call re-queries its own full window,
+ending at the last completed hour boundary rather than the exact instant
+the scheduler happened to fire (so a 13:40 run reports 12:00-13:00 for the
+1h window, not "13:40 minus 60 minutes") -- this reads as a clean hourly
+slot instead of a realtime-but-arbitrary cutoff. A late/skipped scheduled
+run is self-healing as long as the next run happens before the window
+rolls past it (run_sales_alerts.py runs every 40 min; the 1h/4h windows
+give 20/200 minutes of margin against the boundary moving). What this does
+NOT cover is a multi-hour ChannelAdvisor/scheduler outage -- that
 pre-existing limitation (same under the old CSV export) is caught by
 activity_log/daily_summary's "did the scheduler run at all" visibility,
 not backfilled here.
@@ -120,9 +124,14 @@ def _get_orders_page(
 
 
 def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped") -> list[dict]:
-    """Orders with CreatedDateUtc in the trailing window_minutes, one row per
-    line item: {order_id, supplier_sku, title, quantity, unit_price, channel}.
-    `title`/`quantity`/`unit_price`/`channel` are display-only extras
+    """Orders with CreatedDateUtc in the window_minutes ending at the last
+    completed hour boundary (UTC, which is also GB-local since GMT/BST are
+    both whole-hour offsets), one row per line item: {order_id,
+    supplier_sku, title, quantity, unit_price, channel}. E.g. run at 13:40,
+    window_minutes=60 -> 12:00-13:00; window_minutes=240 -> 09:00-13:00 --
+    hour-aligned so the report reads as "orders in the 12-1 slot", not
+    "orders in the last 60 minutes as of whenever the scheduler happened to
+    fire". `title`/`quantity`/`unit_price`/`channel` are display-only extras
     (product name, units sold, per-unit price, sales channel e.g. "Amazon
     UK"/"Temu UK"/"eBay Fixed Price UK") used by the alert emails' product
     breakdown -- threshold counting itself (count_by_sku/count_distinct_
@@ -135,7 +144,7 @@ def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped") -
     out wrong.
     """
     config = _config()
-    end = datetime.now(timezone.utc)
+    end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
     start = end - timedelta(minutes=window_minutes)
     filter_value = (
         f"ProfileID eq {config['profile_id']} and "
