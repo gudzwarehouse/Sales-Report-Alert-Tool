@@ -9,6 +9,7 @@ the summary logic is unit-testable against hand-built log lines.
 from __future__ import annotations
 
 import datetime
+import json
 import re
 from html import escape
 
@@ -17,7 +18,8 @@ import activity_log
 _LINE_RE = re.compile(r"^(?P<ts>\S+) \[(?P<level>\w+)\] (?P<component>\S+): (?P<message>.*)$")
 
 
-_WINDOW_OK_RE = re.compile(r"^\[(?P<window>\w+)\] OK on attempt \d+: (?P<count>\d+) order line")
+_HIT_PREFIX = "SKU threshold hit: "
+_WINDOW_OK_RE =re.compile(r"^\[(?P<window>\w+)\] OK on attempt \d+: (?P<count>\d+) order line")
 
 
 def window_lines(summary: dict) -> list[str]:
@@ -69,12 +71,20 @@ def parse_log_lines(lines: list[str]) -> dict:
         "alert_times": [],    # parallel to alert_subjects, UK "2:05 PM"
         "failure_times": [],  # parallel to failures
         "window_peaks": {},  # {"1h": highest order-line count seen, "4h": ...}
+        "sku_hits": [],      # aggregated, see _aggregate_sku_hits
     }
+    raw_hits: list[dict] = []
     for raw in lines:
         match = _LINE_RE.match(raw.strip())
         if not match:
             continue
         level, message = match["level"], match["message"]
+        if message.startswith(_HIT_PREFIX):
+            try:
+                raw_hits.append(json.loads(message[len(_HIT_PREFIX):]))
+            except ValueError:
+                pass
+            continue
         window_match = _WINDOW_OK_RE.match(message)
         if window_match:
             window, count = window_match["window"], int(window_match["count"])
@@ -94,7 +104,49 @@ def parse_log_lines(lines: list[str]) -> dict:
             if alert_match:
                 summary["alert_subjects"].append(alert_match.group(1))
                 summary["alert_times"].append(_uk_time(match["ts"]))
+    summary["sku_hits"] = _aggregate_sku_hits(raw_hits)
     return summary
+
+
+def _aggregate_sku_hits(raw_hits: list[dict]) -> list[dict]:
+    """Collapse the per-run "SKU threshold hit" log lines (the same hour-aligned
+    slot is re-evaluated every ~40 min) into one entry per (window, SKU):
+    number of distinct slots hit, the slot with the peak order count (its
+    product detail is the one shown), and the SKU's latest status.
+    Alerted first, then by slots hit, then peak orders."""
+    per_slot: dict[tuple, dict] = {}
+    for hit in raw_hits:
+        key = (hit.get("window"), hit.get("sku"), hit.get("slot"))
+        prev = per_slot.get(key)
+        if prev is None or (hit.get("orders") or 0) >= (prev.get("orders") or 0):
+            per_slot[key] = hit
+    latest_status: dict[tuple, str] = {}
+    for hit in raw_hits:  # file order == chronological
+        latest_status[(hit.get("window"), hit.get("sku"))] = hit.get("status", "")
+    grouped: dict[tuple, dict] = {}
+    for (window, sku, slot), hit in per_slot.items():
+        entry = grouped.get((window, sku))
+        if entry is None:
+            entry = grouped[(window, sku)] = {**hit, "slots": [], "status": latest_status[(window, sku)]}
+        entry["slots"].append(slot)
+        if (hit.get("orders") or 0) > (entry.get("orders") or 0):
+            for k in ("orders", "quantity", "sales_value", "title", "channels", "online_sku"):
+                entry[k] = hit.get(k)
+    result = list(grouped.values())
+    for entry in result:
+        entry["slots"] = sorted(set(entry["slots"]))
+    result.sort(key=lambda e: (e["status"] != "alerted", -len(e["slots"]), -(e.get("orders") or 0)))
+    return result
+
+
+def _hit_headline(hit: dict) -> str:
+    n = len(hit["slots"])
+    slots = "1 time slot" if n == 1 else f"{n} time slots"
+    return f"{hit['window']}: hit the threshold of {hit.get('threshold')} in {slots}, peak {hit.get('orders')} orders"
+
+
+def _hit_status_label(hit: dict) -> str:
+    return "ALERT SENT" if hit["status"] == "alerted" else "EXCLUDED - no alert sent"
 
 
 def read_today_log_lines(date_str: str) -> list[str]:
@@ -125,6 +177,16 @@ def render_summary_text(date_str: str, summary: dict) -> str:
         lines.append("Alerts sent today (UK time):")
         for t, subject in zip(summary["alert_times"], summary["alert_subjects"]):
             lines.append(f"  - {timed(t, subject)}")
+    if summary.get("sku_hits"):
+        lines.append("")
+        lines.append("SKUs that reached a SKU threshold today:")
+        for hit in summary["sku_hits"]:
+            lines.append(f"  - [{_hit_status_label(hit)}] {hit.get('title') or hit['sku']}")
+            lines.append(f"      SKU: {hit['sku']}  Online SKU: {hit.get('online_sku') or '-'}")
+            lines.append(f"      {_hit_headline(hit)}; peak slot qty {hit.get('quantity')}, sales £{float(hit.get('sales_value') or 0):,.2f}")
+            if hit.get("channels"):
+                lines.append(f"      Channel(s): {hit['channels']}")
+            lines.append(f"      Slots (UTC): {', '.join(hit['slots'])}")
     if summary["failures"]:
         lines.append("")
         lines.append("Warnings:")
@@ -184,6 +246,46 @@ def render_summary_html(date_str: str, summary: dict) -> str:
             + "</ul></div>"
         )
 
+    hits_section = ""
+    if summary.get("sku_hits"):
+        def hit_block(hit: dict) -> str:
+            sent = hit["status"] == "alerted"
+            pill_bg, pill_fg = ("#fffbeb", "#b45309") if sent else ("#f3f4f6", "#4b5563")
+            sku_parts = f"SKU: {escape(hit['sku'])}"
+            if hit.get("online_sku"):
+                sku_parts += f" &middot; Online SKU: {escape(hit['online_sku'])}"
+            channels = (
+                f'<div style="font-size:12px;color:#6b7280;margin-top:2px;">{escape(hit["channels"])}</div>'
+                if hit.get("channels") else ""
+            )
+            stat = lambda label, value: (  # noqa: E731
+                '<td width="33%" valign="top" style="padding:0 4px 0 0;">'
+                f'<div style="font-size:11px;text-transform:uppercase;color:#9ca3af;">{label}</div>'
+                f'<div style="font-size:15px;font-weight:600;color:#111827;">{escape(str(value))}</div></td>'
+            )
+            return (
+                '<div style="padding:12px 0;border-bottom:1px solid #f3f4f6;">'
+                f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700;background:{pill_bg};color:{pill_fg};">{escape(_hit_status_label(hit))}</span>'
+                f'<div style="font-size:14px;font-weight:600;color:#111827;margin-top:6px;word-wrap:break-word;overflow-wrap:anywhere;">{escape(str(hit.get("title") or hit["sku"]))}</div>'
+                f'<div style="font-size:12px;color:#9ca3af;margin-top:2px;word-break:break-all;">{sku_parts}</div>'
+                f'{channels}'
+                f'<div style="font-size:13px;color:#374151;margin-top:6px;">{escape(_hit_headline(hit))}</div>'
+                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin-top:8px;border-collapse:collapse;"><tr>'
+                f'{stat("Peak orders", hit.get("orders"))}{stat("Qty (peak slot)", hit.get("quantity"))}'
+                f'{stat("Sales (peak slot)", "£%s" % format(float(hit.get("sales_value") or 0), ",.2f"))}'
+                '</tr></table>'
+                f'<div style="font-size:11px;color:#9ca3af;margin-top:6px;">Slots (UTC): {escape(", ".join(hit["slots"]))}</div>'
+                '</div>'
+            )
+        hits_section = (
+            '<div style="margin-top:16px;"><div style="font-size:11px;font-weight:700;'
+            'letter-spacing:.04em;text-transform:uppercase;color:#6b7280;margin-bottom:2px;">'
+            "SKUs that reached a SKU threshold today</div>"
+            '<div style="font-size:12px;color:#9ca3af;">Excluded SKUs are on the exclude list, so they reach the threshold without sending an alert.</div>'
+            + "".join(hit_block(h) for h in summary["sku_hits"])
+            + "</div>"
+        )
+
     failures_section = ""
     if summary["failures"]:
         failures_section = (
@@ -207,6 +309,7 @@ def render_summary_html(date_str: str, summary: dict) -> str:
 <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;font-size:14px;">{stats_rows}</table>
 {windows_section}
 {alerts_section}
+{hits_section}
 {failures_section}
 <div style="font-size:12px;color:#9ca3af;border-top:1px solid #e5e7eb;margin-top:16px;padding-top:12px;">This is an automated daily summary from Sales Report Tool.</div>
 </div></body></html>"""

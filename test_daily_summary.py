@@ -42,6 +42,7 @@ def test_parse_log_lines_empty_input():
         "alert_times": [],
         "failure_times": [],
         "window_peaks": {},
+        "sku_hits": [],
     }
 
 
@@ -111,3 +112,27 @@ def test_alerts_and_failures_show_uk_time_am_pm():
     assert "9:05 AM - A morning" in text
     assert "2:40 PM - An afternoon" in text
     assert "12:10 AM - Run FAILED after 1.0s: boom" in text
+
+
+def _hit(slot, orders, status, sku="PIPE5G016"):
+    import json
+    p = {"window": "1h", "slot": slot, "sku": sku, "status": status, "orders": orders, "quantity": orders,
+         "sales_value": 10.0 * orders, "title": "Pipe", "channels": "Amazon UK (3)", "online_sku": "PIPE5G016(1)", "threshold": 3}
+    return f"2026-11-18T13:01:00 [INFO] sales_pipeline: SKU threshold hit: {json.dumps(p)}"
+
+
+def test_sku_hits_aggregated_and_not_a_failure():
+    lines = [
+        _hit("11:00-12:00", 3, "excluded"), _hit("11:00-12:00", 4, "excluded"),  # same slot re-evaluated
+        _hit("12:00-13:00", 3, "excluded"),
+        _hit("12:00-13:00", 3, "alerted", sku="NATPADE07"),
+    ]
+    summary = daily_summary.parse_log_lines(lines)
+    assert summary["runs_failed"] == 0 and summary["failures"] == []
+    hits = summary["sku_hits"]
+    assert [h["sku"] for h in hits] == ["NATPADE07", "PIPE5G016"]  # alerted first
+    pipe = hits[1]
+    assert pipe["slots"] == ["11:00-12:00", "12:00-13:00"] and pipe["orders"] == 4
+    assert daily_summary.summary_status(summary) == "SUCCESS"
+    assert "EXCLUDED" in daily_summary.render_summary_text("2026-11-18", summary)
+    assert "Online SKU: PIPE5G016(1)" in daily_summary.render_summary_html("2026-11-18", summary)

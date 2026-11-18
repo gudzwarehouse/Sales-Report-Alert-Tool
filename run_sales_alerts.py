@@ -17,6 +17,8 @@ Run: python run_sales_alerts.py
 from __future__ import annotations
 
 import datetime
+import functools
+import json
 import os
 import sys
 import time
@@ -96,6 +98,23 @@ def _check_window(
             time.sleep(wait)
 
 
+def make_sku_hit_logger(window_label: str, window_minutes: int):
+    """Hook for evaluate_1h/4h: one activity-log line per SKU at/over the lowest
+    SKU threshold (alerted or excluded), parsed back by daily_summary. INFO level,
+    so it never shows up as a warning/error."""
+    def log_hits(items: list[dict]) -> None:
+        start, end = ca_orders_client.window_bounds(window_minutes)
+        slot = f"{start:%H:%M}-{end:%H:%M}"
+        for item in items:
+            payload = {"window": window_label, "slot": slot, **{
+                k: item.get(k) for k in (
+                    "sku", "status", "orders", "quantity", "sales_value", "title",
+                    "channels", "online_sku", "threshold",
+                )}}
+            activity_log.log_activity("INFO", f"SKU threshold hit: {json.dumps(payload, ensure_ascii=False)}")
+    return log_hits
+
+
 def main() -> None:
     start_time = time.monotonic()
     counters = {"alerts_sent": 0, "orders_1h": 0, "orders_4h": 0}
@@ -129,8 +148,10 @@ def main() -> None:
     send_alert = make_send_alert(counters)
 
     try:
-        counters["orders_1h"], _ = _check_window("1h", 60, evaluate_1h, lookup, config, exceptions, send_alert)
-        counters["orders_4h"], _ = _check_window("4h", 240, evaluate_4h, lookup, config, exceptions, send_alert)
+        eval_1h = functools.partial(evaluate_1h, on_sku_hits=make_sku_hit_logger("1h", 60))
+        eval_4h = functools.partial(evaluate_4h, on_sku_hits=make_sku_hit_logger("4h", 240))
+        counters["orders_1h"], _ = _check_window("1h", 60, eval_1h, lookup, config, exceptions, send_alert)
+        counters["orders_4h"], _ = _check_window("4h", 240, eval_4h, lookup, config, exceptions, send_alert)
     except Exception as error:  # noqa: BLE001 - report then exit, matching RunProcess's ErrorHandler
         duration = time.monotonic() - start_time
         log(f"Run FAILED after {duration:.1f}s: {error}", level="ERROR")

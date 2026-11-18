@@ -197,6 +197,25 @@ def _sku_breach_items(matched: list[tuple[str, int]], stats: dict[str, dict]) ->
     return items
 
 
+def _sku_hit_items(
+    counts: dict[str, int],
+    buckets: list[dict],
+    exceptions: set[str],
+    stats: dict[str, dict],
+) -> list[dict]:
+    """Every SKU at/over the window's LOWEST sku_threshold, with product
+    detail and a status: "alerted" (an alert email was sent) or "excluded"
+    (reached the threshold but is on the exclude list, so no alert). Feeds the
+    daily summary -- never sends anything itself."""
+    low = min(b["sku_threshold"] for b in buckets)
+    hits = sorted(((sku, n) for sku, n in counts.items() if n >= low), key=lambda p: p[1], reverse=True)
+    items = _sku_breach_items(hits, stats)
+    for item in items:
+        item["status"] = "excluded" if item["sku"] in exceptions else "alerted"
+        item["threshold"] = low
+    return items
+
+
 def _window_totals(stats: dict[str, dict], total_orders: int) -> dict:
     return {
         "orders": total_orders,
@@ -230,8 +249,12 @@ def evaluate_1h(
     config: dict,
     exceptions: set[str],
     send_alert: Callable[..., None],
+    on_sku_hits: Callable[[list[dict]], None] | None = None,
 ) -> None:
     """Port of ReadLastHourSKU + ReadLastHour's counting/alerting logic, no I/O.
+
+    ``on_sku_hits`` (optional) receives every SKU at/over the lowest SKU
+    threshold -- alerted AND excluded -- for the daily summary.
 
     ``raw_rows`` is {order_id, supplier_sku} per row -- same shape
     load_orders_csv produces, so this works identically whether the rows
@@ -242,6 +265,10 @@ def evaluate_1h(
     stats = _aggregate_sku_stats(rows)
 
     counts = count_by_sku(rows)
+    if on_sku_hits is not None:
+        hits = _sku_hit_items(counts, buckets, exceptions, stats)
+        if hits:
+            on_sku_hits(hits)
     for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
         severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
         items = _sku_breach_items(matched, stats)
@@ -283,6 +310,7 @@ def evaluate_4h(
     config: dict,
     exceptions: set[str],
     send_alert: Callable[..., None],
+    on_sku_hits: Callable[[list[dict]], None] | None = None,
 ) -> None:
     """Port of ReadLast4Hours's counting/alerting logic, no I/O (see evaluate_1h)."""
     rows = map_to_our_sku(drop_ignored_online_skus(raw_rows), sku_lookup)
@@ -290,6 +318,10 @@ def evaluate_4h(
     stats = _aggregate_sku_stats(rows)
 
     counts = count_by_sku(rows)
+    if on_sku_hits is not None:
+        hits = _sku_hit_items(counts, buckets, exceptions, stats)
+        if hits:
+            on_sku_hits(hits)
     for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
         severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
         items = _sku_breach_items(matched, stats)
