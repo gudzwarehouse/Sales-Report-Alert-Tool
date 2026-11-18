@@ -201,6 +201,41 @@ with tab_exceptions:
         if col_cancel.button("Cancel", key="cancel_exceptions"):
             st.rerun()
 
+        st.markdown("---")
+        st.subheader("Bulk add from Excel")
+        st.caption(
+            "Upload an .xlsx with one SKU per row. If row 1 has a header containing \"SKU\" "
+            "(e.g. OurSKU) that column is used; otherwise column A. First sheet only. "
+            "SKUs are added to the existing list (duplicates skipped) -- nothing is removed."
+        )
+        st.download_button(
+            "Download sample (header only)",
+            data=config_store.exceptions_template_xlsx(),
+            file_name="excluded_skus_template.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            key="download_exceptions_template",
+        )
+        upload = st.file_uploader("Excel file", type=["xlsx"], key="exceptions_upload")
+        if upload is not None:
+            try:
+                uploaded = config_store.parse_skus_from_xlsx(upload)
+            except Exception as error:  # noqa: BLE001
+                st.error(f"Could not read that file: {error}")
+                uploaded = None
+            if uploaded is not None:
+                existing = set(exceptions)
+                new_skus = [s for s in uploaded if s not in existing]
+                st.write(
+                    f"Found **{len(uploaded)}** SKU(s): **{len(new_skus)}** new, "
+                    f"{len(uploaded) - len(new_skus)} already excluded."
+                )
+                if new_skus:
+                    st.dataframe(pd.DataFrame({"New SKU": new_skus}), use_container_width=True, height=240)
+                    if st.button(f"Add {len(new_skus)} SKU(s)", type="primary", key="bulk_add_exceptions"):
+                        saved = config_store.save_exceptions(exceptions + new_skus)
+                        st.success(f"Added {len(new_skus)}. Now {len(saved)} excluded SKU(s).")
+                        st.rerun()
+
 SOURCE_WORKBOOKS = [
     (
         "StockFeeds.xlsm",

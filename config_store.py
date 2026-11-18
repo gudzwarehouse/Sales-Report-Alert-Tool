@@ -56,6 +56,58 @@ def load_exceptions() -> list[str]:
     return list(data.get("skus", []))
 
 
+def parse_skus_from_xlsx(file) -> list[str]:
+    """Read SKUs from an uploaded .xlsx (path or file-like) -- first sheet only.
+
+    If row 1 has a header containing "sku" (e.g. "SKU", "OurSKU"), that
+    column is used and the header row is skipped; otherwise column A is used
+    and every row is treated as data. Blank cells and duplicates are dropped.
+    """
+    from openpyxl import load_workbook
+
+    wb = load_workbook(file, read_only=True, data_only=True)
+    try:
+        rows = list(wb.worksheets[0].iter_rows(values_only=True))
+    finally:
+        wb.close()
+    if not rows:
+        return []
+    col, start = 0, 0
+    for i, cell in enumerate(rows[0]):
+        if cell is not None and "sku" in str(cell).lower():
+            col, start = i, 1
+            break
+    out: list[str] = []
+    seen: set[str] = set()
+    for row in rows[start:]:
+        if col >= len(row) or row[col] is None:
+            continue
+        value = row[col]
+        if isinstance(value, float) and value.is_integer():
+            value = int(value)
+        sku = str(value).strip()
+        if sku and sku not in seen:
+            out.append(sku)
+            seen.add(sku)
+    return out
+
+
+def exceptions_template_xlsx() -> bytes:
+    """Header-only .xlsx template for bulk-adding excluded SKUs."""
+    import io
+
+    from openpyxl import Workbook
+
+    wb = Workbook()
+    ws = wb.active
+    ws.title = "Excluded SKUs"
+    ws["A1"] = "OurSKU"
+    ws.column_dimensions["A"].width = 24
+    buf = io.BytesIO()
+    wb.save(buf)
+    return buf.getvalue()
+
+
 def save_exceptions(skus: list[str]) -> list[str]:
     """Validate, de-dupe (case-sensitive -- SKUs are case-sensitive identifiers
     here, unlike the supplier-name whitelist in VB Stock update), and save.
