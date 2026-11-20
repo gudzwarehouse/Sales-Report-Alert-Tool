@@ -34,8 +34,10 @@ def main() -> None:
     cc_list = [addr.strip() for addr in cc_raw.split(",") if addr.strip()] if cc_raw else DEFAULT_CC
 
     date_str = datetime.date.today().isoformat()
-    lines = daily_summary.read_today_log_lines(date_str)
+    now = datetime.datetime.now().replace(microsecond=0)
+    lines = daily_summary.read_last_hours_log_lines(now, 24)
     summary = daily_summary.parse_log_lines(lines)
+    summary["period"] = daily_summary.period_label(now, 24)
     try:
         import config_store
         summary["window_thresholds"] = {

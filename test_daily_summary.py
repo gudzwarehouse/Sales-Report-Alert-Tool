@@ -159,3 +159,18 @@ def test_total_and_sku_hits_shown_separately_per_window():
     assert "ALERT SENT" in text and "REACHED - in-between check, no email" in text and "EXCLUDED" in text
     assert "per-SKU threshold" in daily_summary.render_summary_html("2026-11-20", summary)
     assert daily_summary.summary_status(summary) == "SUCCESS"
+
+
+def test_last_24h_reads_across_two_log_files(monkeypatch):
+    import datetime as dt
+    files = {
+        "2026-11-19": ["2026-11-19T14:00:00 [INFO] sales_pipeline: Run started\n",   # 25h before: excluded
+                       "2026-11-19T16:00:00 [INFO] sales_pipeline: Run started\n"],  # included
+        "2026-11-20": ["2026-11-20T00:10:00 [INFO] sales_pipeline: Run started\n",
+                       "2026-11-20T15:30:00 [INFO] sales_pipeline: Run started\n"],  # after now: excluded
+    }
+    monkeypatch.setattr(daily_summary, "read_today_log_lines", lambda d: files.get(d, []))
+    now = dt.datetime(2026, 11, 20, 15, 0)
+    lines = daily_summary.read_last_hours_log_lines(now, 24)
+    assert [l[:19] for l in lines] == ["2026-11-19T16:00:00", "2026-11-20T00:10:00"]
+    assert "2026-11-19 15:00 to 2026-11-20 15:00" in daily_summary.period_label(now)

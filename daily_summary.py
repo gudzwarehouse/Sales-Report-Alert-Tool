@@ -191,9 +191,31 @@ def read_today_log_lines(date_str: str) -> list[str]:
         return f.readlines()
 
 
+def read_last_hours_log_lines(now: datetime.datetime, hours: int = 24) -> list[str]:
+    """Log lines from the trailing ``hours`` before ``now`` (server-local time),
+    read from today's and the previous day's shared log files."""
+    cutoff = now - datetime.timedelta(hours=hours)
+    out: list[str] = []
+    for day in (cutoff.date(), now.date()) if cutoff.date() != now.date() else (now.date(),):
+        for line in read_today_log_lines(day.isoformat()):
+            try:
+                ts = datetime.datetime.fromisoformat(line.split(" ", 1)[0])
+            except ValueError:
+                continue
+            if cutoff <= ts <= now:
+                out.append(line)
+    return out
+
+
+def period_label(now: datetime.datetime, hours: int = 24) -> str:
+    start = now - datetime.timedelta(hours=hours)
+    return f"Last {hours}h: {start:%Y-%m-%d %H:%M} to {now:%Y-%m-%d %H:%M} (UK time)"
+
+
 def render_summary_text(date_str: str, summary: dict) -> str:
     lines = [
         f"Sales Report Tool -- daily summary for {date_str}",
+        *([summary["period"]] if summary.get("period") else []),
         "",
         f"Runs started:   {summary['runs_started']}",
         f"Runs completed: {summary['runs_completed']}",
@@ -357,6 +379,7 @@ def render_summary_html(date_str: str, summary: dict) -> str:
 <div style="border-bottom:2px solid #e5e7eb;padding-bottom:12px;margin-bottom:16px;">
 <h2 style="margin:0 0 6px;color:#111827;">Sales Report Tool -- daily summary</h2>
 <div style="font-size:13px;color:#6b7280;">{escape(date_str)}</div>
+{('<div style="font-size:12px;color:#6b7280;">' + escape(summary["period"]) + '</div>') if summary.get("period") else ""}
 <div style="margin-top:8px;"><span style="background:{status_color};color:#ffffff;padding:3px 10px;border-radius:12px;font-size:12px;font-weight:600;">STATUS: {status_text}</span></div>
 </div>
 <table role="presentation" width="100%" style="width:100%;border-collapse:collapse;font-size:14px;">{stats_rows}</table>
