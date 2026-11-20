@@ -252,6 +252,7 @@ def evaluate_1h(
     on_sku_hits: Callable[[list[dict]], None] | None = None,
     alert_state=None,
     on_total_hit: Callable[[dict], None] | None = None,
+    window_range: str | None = None,
 ) -> None:
     """Port of ReadLastHourSKU + ReadLastHour's counting/alerting logic, no I/O.
 
@@ -262,6 +263,10 @@ def evaluate_1h(
     load_orders_csv produces, so this works identically whether the rows
     came from a CSV file or ca_orders_client.fetch_recent_order_rows().
     """
+    # window_range e.g. "13:00-14:00" -- shown in subject/heading instead of "last hour"
+    period = window_range or "last hour"
+    period_total = window_range or "last 1 hour"
+    in_phrase = f"in {window_range}" if window_range else "in the last hour"
     rows = map_to_our_sku(drop_ignored_online_skus(raw_rows), sku_lookup)
     buckets = config["1h"]
     stats = _aggregate_sku_stats(rows)
@@ -279,13 +284,13 @@ def evaluate_1h(
         severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
         items = _sku_breach_items(matched, stats)
         send_alert(
-            f"[1h TH] [{severity}] CA Sales - Orders last hour",
+            f"[1h TH] [{severity}] CA Sales - Orders {period}",
             _format_sku_alert_body(threshold, items),
             to=recipients,
             html_body=render_product_breach_html(
-                title="Orders last hour -- SKU threshold breach",
+                title=f"Orders {period} -- SKU threshold breach",
                 severity=severity,
-                subtitle=f"The following SKUs have over {threshold} orders in the last hour",
+                subtitle=f"The following SKUs have over {threshold} orders {in_phrase}",
                 items=items,
             ),
         )
@@ -308,11 +313,11 @@ def evaluate_1h(
         severity = _severity_for_threshold(threshold, buckets, "total_threshold")
         totals = _window_totals(stats, total)
         send_alert(
-            f"[1h TH] [{severity}] CA Sales - Orders last 1 hour (Total: {total})",
+            f"[1h TH] [{severity}] CA Sales - Orders {period_total} (Total: {total})",
             _format_total_alert_body(threshold, total, totals),
             to=recipients,
             html_body=render_product_breach_html(
-                title="Orders last 1 hour -- Total threshold breach",
+                title=f"Orders {period_total} -- Total threshold breach",
                 severity=severity,
                 subtitle=f"Total orders are greater than {threshold} (actual: {total})",
                 items=[],
@@ -332,8 +337,11 @@ def evaluate_4h(
     on_sku_hits: Callable[[list[dict]], None] | None = None,
     alert_state=None,
     on_total_hit: Callable[[dict], None] | None = None,
+    window_range: str | None = None,
 ) -> None:
     """Port of ReadLast4Hours's counting/alerting logic, no I/O (see evaluate_1h)."""
+    period = window_range or "last 4 hours"
+    in_phrase = f"in {window_range}" if window_range else "in the last 4 hours"
     rows = map_to_our_sku(drop_ignored_online_skus(raw_rows), sku_lookup)
     buckets = config["4h"]
     stats = _aggregate_sku_stats(rows)
@@ -351,13 +359,13 @@ def evaluate_4h(
         severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
         items = _sku_breach_items(matched, stats)
         send_alert(
-            f"[4h TH] [{severity}] CA Sales - Orders last 4 hours",
+            f"[4h TH] [{severity}] CA Sales - Orders {period}",
             _format_sku_alert_body(threshold, items),
             to=recipients,
             html_body=render_product_breach_html(
-                title="Orders last 4 hours -- SKU threshold breach",
+                title=f"Orders {period} -- SKU threshold breach",
                 severity=severity,
-                subtitle=f"The following SKUs have over {threshold} orders in the last 4 hours",
+                subtitle=f"The following SKUs have over {threshold} orders {in_phrase}",
                 items=items,
             ),
         )
@@ -380,11 +388,11 @@ def evaluate_4h(
         severity = _severity_for_threshold(threshold, buckets, "total_threshold")
         totals = _window_totals(stats, total)
         send_alert(
-            f"[4h TH] [{severity}] CA Sales - Orders last 4 hours (Total: {total})",
+            f"[4h TH] [{severity}] CA Sales - Orders {period} (Total: {total})",
             _format_total_alert_body(threshold, total, totals),
             to=recipients,
             html_body=render_product_breach_html(
-                title="Orders last 4 hours -- Total threshold breach",
+                title=f"Orders {period} -- Total threshold breach",
                 severity=severity,
                 subtitle=f"Total orders are greater than {threshold} (actual: {total})",
                 items=[],

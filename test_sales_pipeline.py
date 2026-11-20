@@ -284,3 +284,25 @@ def test_alert_state_instances_do_not_overwrite_each_other(tmp_path):
     b.mark("total", "all", 120)
     c = alert_state.AlertState("4h@x", path)
     assert not c.is_new("sku", "S1", 10) and not c.is_new("total", "all", 120)
+
+
+def test_alert_subjects_show_window_range():
+    from sales_pipeline import evaluate_1h, evaluate_4h
+    cfg = {"1h": [{"sku_threshold": 3, "total_threshold": 2, "recipients": ["a@x"]}],
+           "4h": [{"sku_threshold": 3, "total_threshold": 2, "recipients": ["a@x"]}]}
+    rows = [{"order_id": f"O{i}", "supplier_sku": "ON1"} for i in range(3)]
+    sent = []
+    send = lambda subject, body, **k: sent.append((subject, k.get("html_body", "")))  # noqa: E731
+    evaluate_1h(rows, {"ON1": "OUR1"}, cfg, set(), send, window_range="13:00-14:00")
+    evaluate_4h(rows, {"ON1": "OUR1"}, cfg, set(), send, window_range="08:00-12:00")
+    assert [s for s, _ in sent] == [
+        "[1h TH] [HIGH] CA Sales - Orders 13:00-14:00",
+        "[1h TH] [HIGH] CA Sales - Orders 13:00-14:00 (Total: 3)",
+        "[4h TH] [HIGH] CA Sales - Orders 08:00-12:00",
+        "[4h TH] [HIGH] CA Sales - Orders 08:00-12:00 (Total: 3)",
+    ]
+    assert "UTC" not in "".join(s + h for s, h in sent)
+    assert "Orders 08:00-12:00 -- SKU threshold breach" in sent[2][1]
+    sent.clear()
+    evaluate_1h(rows, {"ON1": "OUR1"}, cfg, set(), send)  # no range: unchanged wording
+    assert sent[0][0] == "[1h TH] [HIGH] CA Sales - Orders last hour"

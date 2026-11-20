@@ -212,7 +212,7 @@ either file. Also confirmed: every row in both exports had
 "1 hour"/"4 hours" (an 11:00-generated file held orders from 09:03) — so
 these were always "currently-Unshipped order backlog, re-pulled
 periodically," not a strict rolling time slice. `fetch_recent_order_rows`
-reproduces that directly: `CreatedDateUtc` in the trailing window **and**
+reproduces that directly: `CreatedDateUtc` (order-placed time) in the trailing window **and**
 `ShippingStatus eq 'Unshipped'`.
 
 **Windows are hour-aligned, not realtime-trailing** — `fetch_recent_order_rows`
@@ -288,3 +288,24 @@ Planned pieces:
 All of the above is now built (Phases 1-3) — see "Data source" above for
 what actually replaced CSV ingestion in the end (the ChannelAdvisor API,
 not the CSV drop originally planned here).
+
+## Window membership: order-placed time, read after a settle delay
+
+Windows count orders by `CreatedDateUtc` (when the customer placed them).
+Measured live (2026-11-20, 829 orders): ChannelAdvisor lists Amazon UK orders
+~55 min after they're placed (median; p95 ~62 min; eBay ~4, Shopify ~11), so
+a slot reads only ~30% full 10 min after its hour ends (09:01 run saw 14
+lines, 09:31 saw 35 for the same slot). `ca_orders_client.window_bounds` therefore
+only ends a window at a boundary at least `WINDOW_SETTLE_MINUTES` (default
+60, `.env`) old: a 13:10 run reads the 1h slot 11-12 (not 12-13), and the 4h
+block 08-12 is first read by the 13:10 run (not 12:10). Alerts therefore
+arrive ~70 min after the slot ends. Counting by `ImportDateUtc` instead was
+tried and rejected: it changes what "11-12" means.
+
+## Schedule (as built)
+
+Task Scheduler runs `run_scheduler.bat` hourly (a few minutes past the hour is
+fine now that windows are import-time based). 1h alerts: once per hourly slot.
+4h: a fixed-block EMAIL check (00-04, 04-08, ... UTC; once per block, state in
+`state/alert_state.json`) plus a rolling 4h check every run that never emails
+and only feeds the daily summary (last 24h, per-window sections).

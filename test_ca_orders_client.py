@@ -176,15 +176,35 @@ def test_fetch_recent_order_rows_raises_without_silent_partial_data(monkeypatch)
         ca_orders_client.fetch_recent_order_rows(60)
 
 
-def test_4h_window_rolls_hourly(monkeypatch):
+def _fake_now(monkeypatch, hour, minute):
     import datetime as dt
     import ca_orders_client as ca
 
     class FakeDT(dt.datetime):
         @classmethod
         def now(cls, tz=None):
-            return cls(2026, 11, 20, 13, 2, tzinfo=tz)
+            return cls(2026, 11, 20, hour, minute, tzinfo=tz)
 
     monkeypatch.setattr(ca, "datetime", FakeDT)
-    start, end = ca.window_bounds(240)
-    assert (start.hour, end.hour) == (9, 13)
+    return ca
+
+
+def test_windows_wait_for_settle_delay(monkeypatch):
+    monkeypatch.delenv("WINDOW_SETTLE_MINUTES", raising=False)  # default 60
+    ca = _fake_now(monkeypatch, 13, 10)
+    start, end = ca.window_bounds(60)
+    assert (start.hour, end.hour) == (11, 12)
+    # 4h block 08-12 is NOT read until it has settled: 12:10 -> still block 04-08
+    ca = _fake_now(monkeypatch, 12, 10)
+    assert tuple(b.hour for b in ca.window_bounds(240, 4)) == (4, 8)
+    ca = _fake_now(monkeypatch, 13, 10)
+    assert tuple(b.hour for b in ca.window_bounds(240, 4)) == (8, 12)
+    assert tuple(b.hour for b in ca.window_bounds(240)) == (8, 12)  # rolling 4h
+
+
+def test_settle_delay_is_configurable(monkeypatch):
+    monkeypatch.setenv("WINDOW_SETTLE_MINUTES", "0")
+    ca = _fake_now(monkeypatch, 13, 10)
+    assert tuple(b.hour for b in ca.window_bounds(60)) == (12, 13)
+    monkeypatch.setenv("WINDOW_SETTLE_MINUTES", "oops")
+    assert ca.settle_minutes() == 60

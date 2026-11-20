@@ -123,17 +123,36 @@ def _get_orders_page(
     return response
 
 
+# Window membership is by the marketplace ORDER-PLACED time (CreatedDateUtc).
+# ChannelAdvisor lists Amazon orders ~55 min after they're placed (median; p95
+# ~62 min), so a slot is only complete well after its hour ends. To read a
+# FULL slot we wait: a window only ends at a boundary that is at least
+# WINDOW_SETTLE_MINUTES (default 60, .env-overridable) in the past.
+WINDOW_DATE_FIELD = "CreatedDateUtc"
+DEFAULT_SETTLE_MINUTES = 60
+
+
+def settle_minutes() -> int:
+    try:
+        return max(0, int(os.getenv("WINDOW_SETTLE_MINUTES", DEFAULT_SETTLE_MINUTES)))
+    except ValueError:
+        return DEFAULT_SETTLE_MINUTES
+
+
 def window_bounds(window_minutes: int, align_hours: int = 1) -> tuple[datetime, datetime]:
     """(start, end) UTC of the window fetch_recent_order_rows queries: ends at
-    the last completed ``align_hours`` boundary (1 = last completed hour;
-    4 = last finished 4-hour block 00/04/08/12/16/20)."""
-    end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    the last ``align_hours`` boundary (1 = whole hour; 4 = 4-hour block
+    00/04/08/12/16/20) that is at least settle_minutes() old. E.g. with the
+    default 60, a run at 13:10 reads 11:00-12:00 (and the 4h block 04-08 until
+    the 08-12 block has settled at 13:00)."""
+    end = (datetime.now(timezone.utc) - timedelta(minutes=settle_minutes())).replace(
+        minute=0, second=0, microsecond=0)
     end = end.replace(hour=end.hour // align_hours * align_hours)
     return end - timedelta(minutes=window_minutes), end
 
 
 def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped", align_hours: int = 1) -> list[dict]:
-    """Orders with CreatedDateUtc in the window_minutes ending at the last
+    """Orders placed (CreatedDateUtc) in the window_minutes ending at the last settled
     completed hour boundary (UTC, which is also GB-local since GMT/BST are
     both whole-hour offsets), one row per line item: {order_id,
     supplier_sku, title, quantity, unit_price, channel}. E.g. run at 13:40,
@@ -156,8 +175,8 @@ def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped", a
     start, end = window_bounds(window_minutes, align_hours)
     filter_value = (
         f"ProfileID eq {config['profile_id']} and "
-        f"CreatedDateUtc ge {start.isoformat().replace('+00:00', 'Z')} and "
-        f"CreatedDateUtc lt {end.isoformat().replace('+00:00', 'Z')} and "
+        f"{WINDOW_DATE_FIELD} ge {start.isoformat().replace('+00:00', 'Z')} and "
+        f"{WINDOW_DATE_FIELD} lt {end.isoformat().replace('+00:00', 'Z')} and "
         f"ShippingStatus eq '{status}'"
     )
 

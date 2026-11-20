@@ -107,6 +107,16 @@ def _slot_label(window_minutes: int, align_hours: int = 1) -> str:
     return f"{start:%H:%M}-{end:%H:%M}"
 
 
+def _range_text(window_minutes: int, align_hours: int = 1) -> str:
+    """Range for alert subjects/headings, e.g. "13:00-14:00"; prefixed with the
+    date ("19 Nov 23:00-00:00") when the window started before today."""
+    start, end = ca_orders_client.window_bounds(window_minutes, align_hours)
+    text = f"{start:%H:%M}-{end:%H:%M}"
+    if start.date() != datetime.datetime.now(datetime.timezone.utc).date():
+        text = f"{start:%d %b} {text}"
+    return text
+
+
 def make_sku_hit_logger(window_label: str, window_minutes: int, align_hours: int = 1):
     """Hook for evaluate_1h/4h: one activity-log line per SKU at/over the lowest
     SKU threshold (alerted or excluded), parsed back by daily_summary. INFO level,
@@ -174,7 +184,8 @@ def main() -> None:
     try:
         eval_1h = functools.partial(
             evaluate_1h, on_sku_hits=make_sku_hit_logger("1h", 60), alert_state=make_alert_state("1h", 60),
-            on_total_hit=make_total_hit_logger("1h", 60))
+            on_total_hit=make_total_hit_logger("1h", 60),
+            window_range=_range_text(60))
         counters["orders_1h"], _ = _check_window("1h", 60, eval_1h, lookup, config, exceptions, send_alert)
 
         # 4h, check A: rolling window every run, to catch breaches BETWEEN the
@@ -192,7 +203,8 @@ def main() -> None:
         if state_4h.is_new("eval", "block", 0):
             eval_4h = functools.partial(
                 evaluate_4h, on_sku_hits=make_sku_hit_logger("4h", 240, 4), alert_state=state_4h,
-                on_total_hit=make_total_hit_logger("4h", 240, 4))
+                on_total_hit=make_total_hit_logger("4h", 240, 4),
+                window_range=_range_text(240, 4))
             _check_window("4h", 240, eval_4h, lookup, config, exceptions, send_alert, align_hours=4)
             state_4h.mark("eval", "block", 0)
         else:
