@@ -246,3 +246,41 @@ def test_fba_online_skus_are_ignored_in_sku_and_total_counts():
     evaluate_4h(rows, {"REAL-1": "OUR-1"}, config, set(),
                 lambda subject, body, *, to, html_body=None: sent.append(subject))
     assert sent == []  # 30 FBA orders neither trip the SKU nor the total threshold
+
+
+def test_alerts_sent_once_per_slot(tmp_path):
+    import datetime
+    import alert_state
+    from sales_pipeline import evaluate_1h
+    config = {"1h": [{"sku_threshold": 3, "total_threshold": 999, "recipients": ["a@x"]}], "4h": []}
+    rows = [{"order_id": f"O{i}", "supplier_sku": "ON1"} for i in range(3)]
+    sent = []
+    send = lambda subject, body, **k: sent.append(subject)  # noqa: E731
+    end = datetime.datetime(2026, 11, 20, 13)
+    path = tmp_path / "s.json"
+    for _ in range(2):  # same slot re-checked
+        st = alert_state.AlertState(alert_state.slot_key("1h", end), path)
+        evaluate_1h(rows, {"ON1": "OUR1"}, config, set(), send, alert_state=st)
+    assert len(sent) == 1
+    st = alert_state.AlertState(alert_state.slot_key("1h", end + datetime.timedelta(hours=1)), path)
+    evaluate_1h(rows, {"ON1": "OUR1"}, config, set(), send, alert_state=st)
+    assert len(sent) == 2  # next hourly slot alerts again
+
+
+def test_4h_slot_blocks():
+    import datetime
+    import alert_state
+    keys = {alert_state.slot_key("4h", datetime.datetime(2026, 11, 20, h)) for h in (9, 10, 11, 12)}
+    assert len(keys) == 1
+    assert alert_state.slot_key("4h", datetime.datetime(2026, 11, 20, 13)) != next(iter(keys))
+
+
+def test_alert_state_instances_do_not_overwrite_each_other(tmp_path):
+    import alert_state
+    path = tmp_path / "s.json"
+    a = alert_state.AlertState("4h@x", path)
+    b = alert_state.AlertState("4h@x", path)
+    a.mark("sku", "S1", 10)
+    b.mark("total", "all", 120)
+    c = alert_state.AlertState("4h@x", path)
+    assert not c.is_new("sku", "S1", 10) and not c.is_new("total", "all", 120)

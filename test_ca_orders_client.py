@@ -174,3 +174,17 @@ def test_fetch_recent_order_rows_raises_without_silent_partial_data(monkeypatch)
 
     with pytest.raises(httpx.ConnectError):
         ca_orders_client.fetch_recent_order_rows(60)
+
+
+def test_4h_window_rolls_hourly(monkeypatch):
+    import datetime as dt
+    import ca_orders_client as ca
+
+    class FakeDT(dt.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 20, 13, 2, tzinfo=tz)
+
+    monkeypatch.setattr(ca, "datetime", FakeDT)
+    start, end = ca.window_bounds(240)
+    assert (start.hour, end.hour) == (9, 13)

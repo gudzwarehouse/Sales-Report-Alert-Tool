@@ -26,6 +26,7 @@ import time
 from dotenv import load_dotenv
 
 import activity_log
+import alert_state
 import ca_orders_client
 import config_store
 import notifications
@@ -57,6 +58,7 @@ WINDOW_RETRY_BASE_DELAY_SECONDS = 5  # 5s, 10s, 20s
 
 def _check_window(
     window_label: str, window_minutes: int, evaluate_fn, lookup, config, exceptions, send_alert,
+    align_hours: int = 1,
 ) -> tuple[int, list[dict]]:
     """Fetch + evaluate one window (1h/4h), self-healing: if the fetch or the
     check itself blows up (e.g. a ChannelAdvisor blip ca_orders_client's own
@@ -77,7 +79,8 @@ def _check_window(
         try:
             log(f"[{window_label}] Fetching trailing {window_minutes}min order window "
                 f"(attempt {attempt}/{MAX_WINDOW_RETRIES})...")
-            rows = ca_orders_client.fetch_recent_order_rows(window_minutes)
+            fetch_kwargs = {"align_hours": align_hours} if align_hours != 1 else {}
+            rows = ca_orders_client.fetch_recent_order_rows(window_minutes, **fetch_kwargs)
             log(f"[{window_label}] Fetched {len(rows)} order line(s) on attempt {attempt}.")
             evaluate_fn(rows, lookup, config, exceptions, send_alert)
             log(f"[{window_label}] Checked successfully on attempt {attempt}.")
@@ -98,13 +101,18 @@ def _check_window(
             time.sleep(wait)
 
 
-def make_sku_hit_logger(window_label: str, window_minutes: int):
+def _slot_label(window_minutes: int, align_hours: int = 1) -> str:
+    """Exact window range as "09:00-13:00" (UTC)."""
+    start, end = ca_orders_client.window_bounds(window_minutes, align_hours)
+    return f"{start:%H:%M}-{end:%H:%M}"
+
+
+def make_sku_hit_logger(window_label: str, window_minutes: int, align_hours: int = 1):
     """Hook for evaluate_1h/4h: one activity-log line per SKU at/over the lowest
     SKU threshold (alerted or excluded), parsed back by daily_summary. INFO level,
     so it never shows up as a warning/error."""
     def log_hits(items: list[dict]) -> None:
-        start, end = ca_orders_client.window_bounds(window_minutes)
-        slot = f"{start:%H:%M}-{end:%H:%M}"
+        slot = _slot_label(window_minutes, align_hours)
         for item in items:
             payload = {"window": window_label, "slot": slot, **{
                 k: item.get(k) for k in (
@@ -113,6 +121,22 @@ def make_sku_hit_logger(window_label: str, window_minutes: int):
                 )}}
             activity_log.log_activity("INFO", f"SKU threshold hit: {json.dumps(payload, ensure_ascii=False)}")
     return log_hits
+
+
+def make_total_hit_logger(window_label: str, window_minutes: int, align_hours: int = 1):
+    """Hook: one log line whenever the window's TOTAL order count is over a
+    threshold (logged every run, even when the email is de-duped)."""
+    def log_hit(info: dict) -> None:
+        payload = {"window": window_label, "slot": _slot_label(window_minutes, align_hours), **info}
+        activity_log.log_activity("INFO", f"Total threshold hit: {json.dumps(payload, ensure_ascii=False)}")
+    return log_hit
+
+
+def make_alert_state(window_label: str, window_minutes: int, align_hours: int = 1) -> alert_state.AlertState:
+    """Once-per-slot de-dupe: 1h alerts per hourly slot (max 24/day), 4h per
+    4-hour block (max 6/day). See alert_state.py."""
+    _, end = ca_orders_client.window_bounds(window_minutes, align_hours)
+    return alert_state.AlertState(alert_state.slot_key(window_label, end))
 
 
 def main() -> None:
@@ -148,10 +172,31 @@ def main() -> None:
     send_alert = make_send_alert(counters)
 
     try:
-        eval_1h = functools.partial(evaluate_1h, on_sku_hits=make_sku_hit_logger("1h", 60))
-        eval_4h = functools.partial(evaluate_4h, on_sku_hits=make_sku_hit_logger("4h", 240))
+        eval_1h = functools.partial(
+            evaluate_1h, on_sku_hits=make_sku_hit_logger("1h", 60), alert_state=make_alert_state("1h", 60),
+            on_total_hit=make_total_hit_logger("1h", 60))
         counters["orders_1h"], _ = _check_window("1h", 60, eval_1h, lookup, config, exceptions, send_alert)
-        counters["orders_4h"], _ = _check_window("4h", 240, eval_4h, lookup, config, exceptions, send_alert)
+
+        # 4h, check A: rolling window every run, to catch breaches BETWEEN the
+        # block boundaries. Never emails -- it only feeds the daily summary.
+        eval_4h_roll = functools.partial(
+            evaluate_4h, on_sku_hits=make_sku_hit_logger("4h_roll", 240),
+            on_total_hit=make_total_hit_logger("4h_roll", 240))
+        counters["orders_4h"], _ = _check_window(
+            "4h_roll", 240, eval_4h_roll, lookup, config, exceptions, lambda *a, **k: None)
+
+        # 4h, check B: the EMAIL alert. Fixed blocks 00-04, 04-08, ... (UTC),
+        # evaluated once, at the first run after a block ends (a missed run
+        # self-heals on the next one); each alert emails once per block.
+        state_4h = make_alert_state("4h", 240, align_hours=4)
+        if state_4h.is_new("eval", "block", 0):
+            eval_4h = functools.partial(
+                evaluate_4h, on_sku_hits=make_sku_hit_logger("4h", 240, 4), alert_state=state_4h,
+                on_total_hit=make_total_hit_logger("4h", 240, 4))
+            _check_window("4h", 240, eval_4h, lookup, config, exceptions, send_alert, align_hours=4)
+            state_4h.mark("eval", "block", 0)
+        else:
+            log("[4h] Latest finished 4-hour block already checked; email check waits for the next block.")
     except Exception as error:  # noqa: BLE001 - report then exit, matching RunProcess's ErrorHandler
         duration = time.monotonic() - start_time
         log(f"Run FAILED after {duration:.1f}s: {error}", level="ERROR")

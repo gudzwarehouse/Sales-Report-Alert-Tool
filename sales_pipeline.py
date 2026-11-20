@@ -250,6 +250,8 @@ def evaluate_1h(
     exceptions: set[str],
     send_alert: Callable[..., None],
     on_sku_hits: Callable[[list[dict]], None] | None = None,
+    alert_state=None,
+    on_total_hit: Callable[[dict], None] | None = None,
 ) -> None:
     """Port of ReadLastHourSKU + ReadLastHour's counting/alerting logic, no I/O.
 
@@ -270,6 +272,10 @@ def evaluate_1h(
         if hits:
             on_sku_hits(hits)
     for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
+        if alert_state is not None:
+            matched = [m for m in matched if alert_state.is_new("sku", m[0], threshold)]
+            if not matched:
+                continue
         severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
         items = _sku_breach_items(matched, stats)
         send_alert(
@@ -283,11 +289,22 @@ def evaluate_1h(
                 items=items,
             ),
         )
+        if alert_state is not None:
+            for sku, _ in matched:
+                alert_state.mark("sku", sku, threshold)
 
     total = count_distinct_orders(rows)
     hit = check_total_threshold(total, buckets)
     if hit is not None:
         threshold, recipients = hit
+        if on_total_hit is not None:
+            on_total_hit({
+                "total": total, "threshold": threshold,
+                "severity": _severity_for_threshold(threshold, buckets, "total_threshold"),
+                **{k: v for k, v in _window_totals(stats, total).items() if k != "orders"},
+            })
+        if alert_state is not None and not alert_state.is_new("total", "all", threshold):
+            return
         severity = _severity_for_threshold(threshold, buckets, "total_threshold")
         totals = _window_totals(stats, total)
         send_alert(
@@ -302,6 +319,8 @@ def evaluate_1h(
                 totals=totals,
             ),
         )
+        if alert_state is not None:
+            alert_state.mark("total", "all", threshold)
 
 
 def evaluate_4h(
@@ -311,6 +330,8 @@ def evaluate_4h(
     exceptions: set[str],
     send_alert: Callable[..., None],
     on_sku_hits: Callable[[list[dict]], None] | None = None,
+    alert_state=None,
+    on_total_hit: Callable[[dict], None] | None = None,
 ) -> None:
     """Port of ReadLast4Hours's counting/alerting logic, no I/O (see evaluate_1h)."""
     rows = map_to_our_sku(drop_ignored_online_skus(raw_rows), sku_lookup)
@@ -323,6 +344,10 @@ def evaluate_4h(
         if hits:
             on_sku_hits(hits)
     for threshold, recipients, matched in check_sku_thresholds(counts, buckets, exceptions):
+        if alert_state is not None:
+            matched = [m for m in matched if alert_state.is_new("sku", m[0], threshold)]
+            if not matched:
+                continue
         severity = _severity_for_threshold(threshold, buckets, "sku_threshold")
         items = _sku_breach_items(matched, stats)
         send_alert(
@@ -336,11 +361,22 @@ def evaluate_4h(
                 items=items,
             ),
         )
+        if alert_state is not None:
+            for sku, _ in matched:
+                alert_state.mark("sku", sku, threshold)
 
     total = count_distinct_orders(rows)
     hit = check_total_threshold(total, buckets)
     if hit is not None:
         threshold, recipients = hit
+        if on_total_hit is not None:
+            on_total_hit({
+                "total": total, "threshold": threshold,
+                "severity": _severity_for_threshold(threshold, buckets, "total_threshold"),
+                **{k: v for k, v in _window_totals(stats, total).items() if k != "orders"},
+            })
+        if alert_state is not None and not alert_state.is_new("total", "all", threshold):
+            return
         severity = _severity_for_threshold(threshold, buckets, "total_threshold")
         totals = _window_totals(stats, total)
         send_alert(
@@ -355,6 +391,8 @@ def evaluate_4h(
                 totals=totals,
             ),
         )
+        if alert_state is not None:
+            alert_state.mark("total", "all", threshold)
 
 
 def run_1h_check(

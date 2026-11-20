@@ -43,6 +43,7 @@ def test_parse_log_lines_empty_input():
         "failure_times": [],
         "window_peaks": {},
         "sku_hits": [],
+        "total_hits": {},
     }
 
 
@@ -136,3 +137,25 @@ def test_sku_hits_aggregated_and_not_a_failure():
     assert daily_summary.summary_status(summary) == "SUCCESS"
     assert "EXCLUDED" in daily_summary.render_summary_text("2026-11-18", summary)
     assert "Online SKU: PIPE5G016(1)" in daily_summary.render_summary_html("2026-11-18", summary)
+
+
+def test_total_and_sku_hits_shown_separately_per_window():
+    import json
+    def total(window, slot, n):
+        p = {"window": window, "slot": slot, "total": n, "threshold": 40, "severity": "MEDIUM", "quantity": n, "sales_value": 1.0}
+        return f"2026-11-20T13:02:00 [INFO] sales_pipeline: Total threshold hit: {json.dumps(p)}"
+    def sku(window, slot, n, status):
+        return _hit(slot, n, status, sku="NATPADE07").replace('"window": "1h"', f'"window": "{window}"')
+    lines = [total("1h", "12:00-13:00", 41), total("4h", "08:00-12:00", 125),
+             total("4h_roll", "09:00-13:00", 130), total("4h_roll", "09:00-13:00", 128), total("4h_roll", "10:00-14:00", 126),
+             _hit("12:00-13:00", 4, "excluded"), sku("4h", "08:00-12:00", 10, "alerted"), sku("4h_roll", "10:00-14:00", 11, "alerted")]
+    summary = daily_summary.parse_log_lines(lines)
+    assert [t["slot"] for t in summary["total_hits"]["4h_roll"]] == ["09:00-13:00", "10:00-14:00"]
+    assert summary["total_hits"]["4h_roll"][0]["total"] == 130
+    text = daily_summary.render_summary_text("2026-11-20", summary)
+    i1, i4, ir = (text.index(k) for k in ("1-hour -- TOTAL", "4-hour block (email alert", "4-hour rolling, between"))
+    assert i1 < i4 < ir
+    assert "08:00-12:00 UTC: 125 orders" in text and "10:00-14:00 UTC: 126 orders" in text
+    assert "ALERT SENT" in text and "REACHED - in-between check, no email" in text and "EXCLUDED" in text
+    assert "per-SKU threshold" in daily_summary.render_summary_html("2026-11-20", summary)
+    assert daily_summary.summary_status(summary) == "SUCCESS"

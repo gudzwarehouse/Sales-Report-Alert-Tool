@@ -19,6 +19,12 @@ _LINE_RE = re.compile(r"^(?P<ts>\S+) \[(?P<level>\w+)\] (?P<component>\S+): (?P<
 
 
 _HIT_PREFIX = "SKU threshold hit: "
+_TOTAL_PREFIX = "Total threshold hit: "
+_WINDOW_NAMES = {
+    "1h": "1-hour",
+    "4h": "4-hour block (email alert, 00-04 / 04-08 / ...)",
+    "4h_roll": "4-hour rolling, between block checks (no email)",
+}
 _WINDOW_OK_RE =re.compile(r"^\[(?P<window>\w+)\] OK on attempt \d+: (?P<count>\d+) order line")
 
 
@@ -72,6 +78,7 @@ def parse_log_lines(lines: list[str]) -> dict:
         "failure_times": [],  # parallel to failures
         "window_peaks": {},  # {"1h": highest order-line count seen, "4h": ...}
         "sku_hits": [],      # aggregated, see _aggregate_sku_hits
+        "total_hits": {},    # {"1h": [{slot, total, threshold, severity}, ...], "4h": [...]}
     }
     raw_hits: list[dict] = []
     for raw in lines:
@@ -84,6 +91,16 @@ def parse_log_lines(lines: list[str]) -> dict:
                 raw_hits.append(json.loads(message[len(_HIT_PREFIX):]))
             except ValueError:
                 pass
+            continue
+        if message.startswith(_TOTAL_PREFIX):
+            try:
+                total_hit = json.loads(message[len(_TOTAL_PREFIX):])
+            except ValueError:
+                continue
+            by_slot = summary["total_hits"].setdefault(total_hit.get("window"), {})
+            prev = by_slot.get(total_hit.get("slot"))
+            if prev is None or (total_hit.get("total") or 0) >= (prev.get("total") or 0):
+                by_slot[total_hit.get("slot")] = total_hit
             continue
         window_match = _WINDOW_OK_RE.match(message)
         if window_match:
@@ -105,6 +122,7 @@ def parse_log_lines(lines: list[str]) -> dict:
                 summary["alert_subjects"].append(alert_match.group(1))
                 summary["alert_times"].append(_uk_time(match["ts"]))
     summary["sku_hits"] = _aggregate_sku_hits(raw_hits)
+    summary["total_hits"] = {w: list(slots.values()) for w, slots in summary["total_hits"].items()}
     return summary
 
 
@@ -127,8 +145,9 @@ def _aggregate_sku_hits(raw_hits: list[dict]) -> list[dict]:
     for (window, sku, slot), hit in per_slot.items():
         entry = grouped.get((window, sku))
         if entry is None:
-            entry = grouped[(window, sku)] = {**hit, "slots": [], "status": latest_status[(window, sku)]}
+            entry = grouped[(window, sku)] = {**hit, "slots": [], "slot_orders": {}, "status": latest_status[(window, sku)]}
         entry["slots"].append(slot)
+        entry["slot_orders"][slot] = hit.get("orders")
         if (hit.get("orders") or 0) > (entry.get("orders") or 0):
             for k in ("orders", "quantity", "sales_value", "title", "channels", "online_sku"):
                 entry[k] = hit.get(k)
@@ -141,12 +160,25 @@ def _aggregate_sku_hits(raw_hits: list[dict]) -> list[dict]:
 
 def _hit_headline(hit: dict) -> str:
     n = len(hit["slots"])
-    slots = "1 time slot" if n == 1 else f"{n} time slots"
-    return f"{hit['window']}: hit the threshold of {hit.get('threshold')} in {slots}, peak {hit.get('orders')} orders"
+    ranges = "1 time range" if n == 1 else f"{n} time ranges"
+    return f"Reached the threshold of {hit.get('threshold')} in {ranges}, peak {hit.get('orders')} orders"
+
+
+def _hit_ranges(hit: dict) -> str:
+    """"09:00-13:00 (4 orders), 10:00-14:00 (5 orders)" -- exact UTC ranges that exceeded."""
+    orders = hit.get("slot_orders", {})
+    return ", ".join(f"{s} ({orders[s]} orders)" if orders.get(s) else s for s in hit["slots"])
+
+
+def _total_line(hit: dict) -> str:
+    tail = f", {hit['severity']}" if hit.get("severity") else ""
+    return f"{hit['slot']} UTC: {hit['total']} orders (threshold {hit['threshold']}{tail})"
 
 
 def _hit_status_label(hit: dict) -> str:
-    return "ALERT SENT" if hit["status"] == "alerted" else "EXCLUDED - no alert sent"
+    if hit["status"] != "alerted":
+        return "EXCLUDED - no alert sent"
+    return "REACHED - in-between check, no email" if hit["window"] == "4h_roll" else "ALERT SENT"
 
 
 def read_today_log_lines(date_str: str) -> list[str]:
@@ -177,16 +209,25 @@ def render_summary_text(date_str: str, summary: dict) -> str:
         lines.append("Alerts sent today (UK time):")
         for t, subject in zip(summary["alert_times"], summary["alert_subjects"]):
             lines.append(f"  - {timed(t, subject)}")
-    if summary.get("sku_hits"):
-        lines.append("")
-        lines.append("SKUs that reached a SKU threshold today:")
-        for hit in summary["sku_hits"]:
-            lines.append(f"  - [{_hit_status_label(hit)}] {hit.get('title') or hit['sku']}")
-            lines.append(f"      SKU: {hit['sku']}  Online SKU: {hit.get('online_sku') or '-'}")
-            lines.append(f"      {_hit_headline(hit)}; peak slot qty {hit.get('quantity')}, sales £{float(hit.get('sales_value') or 0):,.2f}")
-            if hit.get("channels"):
-                lines.append(f"      Channel(s): {hit['channels']}")
-            lines.append(f"      Slots (UTC): {', '.join(hit['slots'])}")
+    for window in ("1h", "4h", "4h_roll"):
+        name = _WINDOW_NAMES[window]
+        totals = summary.get("total_hits", {}).get(window, [])
+        if totals:
+            lines.append("")
+            lines.append(f"{name} -- TOTAL orders over threshold:")
+            lines.extend(f"  - {_total_line(t)}" for t in totals)
+        hits = [h for h in summary.get("sku_hits", []) if h["window"] == window]
+        if hits:
+            lines.append("")
+            lines.append(f"{name} -- per-SKU threshold:")
+            for hit in hits:
+                lines.append(f"  - [{_hit_status_label(hit)}] {hit.get('title') or hit['sku']}")
+                lines.append(f"      SKU: {hit['sku']}  Online SKU: {hit.get('online_sku') or '-'}")
+                sales = float(hit.get("sales_value") or 0)
+                lines.append(f"      {_hit_headline(hit)}; peak qty {hit.get('quantity')}, sales £{sales:,.2f}")
+                if hit.get("channels"):
+                    lines.append(f"      Channel(s): {hit['channels']}")
+                lines.append(f"      Time ranges (UTC): {_hit_ranges(hit)}")
     if summary["failures"]:
         lines.append("")
         lines.append("Warnings:")
@@ -246,45 +287,57 @@ def render_summary_html(date_str: str, summary: dict) -> str:
             + "</ul></div>"
         )
 
-    hits_section = ""
-    if summary.get("sku_hits"):
-        def hit_block(hit: dict) -> str:
-            sent = hit["status"] == "alerted"
-            pill_bg, pill_fg = ("#fffbeb", "#b45309") if sent else ("#f3f4f6", "#4b5563")
-            sku_parts = f"SKU: {escape(hit['sku'])}"
-            if hit.get("online_sku"):
-                sku_parts += f" &middot; Online SKU: {escape(hit['online_sku'])}"
-            channels = (
-                f'<div style="font-size:12px;color:#6b7280;margin-top:2px;">{escape(hit["channels"])}</div>'
-                if hit.get("channels") else ""
-            )
-            stat = lambda label, value: (  # noqa: E731
-                '<td width="33%" valign="top" style="padding:0 4px 0 0;">'
-                f'<div style="font-size:11px;text-transform:uppercase;color:#9ca3af;">{label}</div>'
-                f'<div style="font-size:15px;font-weight:600;color:#111827;">{escape(str(value))}</div></td>'
-            )
-            return (
-                '<div style="padding:12px 0;border-bottom:1px solid #f3f4f6;">'
-                f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700;background:{pill_bg};color:{pill_fg};">{escape(_hit_status_label(hit))}</span>'
-                f'<div style="font-size:14px;font-weight:600;color:#111827;margin-top:6px;word-wrap:break-word;overflow-wrap:anywhere;">{escape(str(hit.get("title") or hit["sku"]))}</div>'
-                f'<div style="font-size:12px;color:#9ca3af;margin-top:2px;word-break:break-all;">{sku_parts}</div>'
-                f'{channels}'
-                f'<div style="font-size:13px;color:#374151;margin-top:6px;">{escape(_hit_headline(hit))}</div>'
-                '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin-top:8px;border-collapse:collapse;"><tr>'
-                f'{stat("Peak orders", hit.get("orders"))}{stat("Qty (peak slot)", hit.get("quantity"))}'
-                f'{stat("Sales (peak slot)", "£%s" % format(float(hit.get("sales_value") or 0), ",.2f"))}'
-                '</tr></table>'
-                f'<div style="font-size:11px;color:#9ca3af;margin-top:6px;">Slots (UTC): {escape(", ".join(hit["slots"]))}</div>'
-                '</div>'
-            )
-        hits_section = (
-            '<div style="margin-top:16px;"><div style="font-size:11px;font-weight:700;'
-            'letter-spacing:.04em;text-transform:uppercase;color:#6b7280;margin-bottom:2px;">'
-            "SKUs that reached a SKU threshold today</div>"
-            '<div style="font-size:12px;color:#9ca3af;">Excluded SKUs are on the exclude list, so they reach the threshold without sending an alert.</div>'
-            + "".join(hit_block(h) for h in summary["sku_hits"])
-            + "</div>"
+    def hit_block(hit: dict) -> str:
+        sent = hit["status"] == "alerted"
+        pill_bg, pill_fg = ("#fffbeb", "#b45309") if sent else ("#f3f4f6", "#4b5563")
+        sku_parts = f"SKU: {escape(hit['sku'])}"
+        if hit.get("online_sku"):
+            sku_parts += f" &middot; Online SKU: {escape(hit['online_sku'])}"
+        channels = (
+            f'<div style="font-size:12px;color:#6b7280;margin-top:2px;">{escape(hit["channels"])}</div>'
+            if hit.get("channels") else ""
         )
+        stat = lambda label, value: (  # noqa: E731
+            '<td width="33%" valign="top" style="padding:0 4px 0 0;">'
+            f'<div style="font-size:11px;text-transform:uppercase;color:#9ca3af;">{label}</div>'
+            f'<div style="font-size:15px;font-weight:600;color:#111827;">{escape(str(value))}</div></td>'
+        )
+        return (
+            '<div style="padding:12px 0;border-bottom:1px solid #f3f4f6;">'
+            f'<span style="display:inline-block;padding:2px 10px;border-radius:999px;font-size:11px;font-weight:700;background:{pill_bg};color:{pill_fg};">{escape(_hit_status_label(hit))}</span>'
+            f'<div style="font-size:14px;font-weight:600;color:#111827;margin-top:6px;word-wrap:break-word;overflow-wrap:anywhere;">{escape(str(hit.get("title") or hit["sku"]))}</div>'
+            f'<div style="font-size:12px;color:#9ca3af;margin-top:2px;word-break:break-all;">{sku_parts}</div>'
+            f'{channels}'
+            f'<div style="font-size:13px;color:#374151;margin-top:6px;">{escape(_hit_headline(hit))}</div>'
+            '<table role="presentation" width="100%" cellpadding="0" cellspacing="0" style="width:100%;margin-top:8px;border-collapse:collapse;"><tr>'
+            f'{stat("Peak orders", hit.get("orders"))}{stat("Qty (peak)", hit.get("quantity"))}'
+            f'{stat("Sales (peak)", "£%s" % format(float(hit.get("sales_value") or 0), ",.2f"))}'
+            '</tr></table>'
+            f'<div style="font-size:11px;color:#9ca3af;margin-top:6px;">Time ranges (UTC): {escape(_hit_ranges(hit))}</div>'
+            '</div>'
+        )
+
+    label_style = ("font-size:11px;font-weight:700;letter-spacing:.04em;text-transform:uppercase;"
+                   "color:#6b7280;margin-bottom:2px;")
+    hits_section = ""
+    for window in ("1h", "4h", "4h_roll"):
+        name = _WINDOW_NAMES[window]
+        totals = summary.get("total_hits", {}).get(window, [])
+        if totals:
+            hits_section += (
+                f'<div style="margin-top:16px;"><div style="{label_style}">{name} -- TOTAL orders over threshold</div>'
+                '<ul style="margin:4px 0 0;padding-left:20px;color:#1f2937;">'
+                + "".join(f"<li>{escape(_total_line(t))}</li>" for t in totals)
+                + "</ul></div>"
+            )
+        hits = [h for h in summary.get("sku_hits", []) if h["window"] == window]
+        if hits:
+            hits_section += (
+                f'<div style="margin-top:16px;"><div style="{label_style}">{name} -- per-SKU threshold</div>'
+                '<div style="font-size:12px;color:#9ca3af;">Excluded SKUs are on the exclude list, so they reach the threshold without sending an alert.</div>'
+                + "".join(hit_block(h) for h in hits)
+                + "</div>"
+            )
 
     failures_section = ""
     if summary["failures"]:

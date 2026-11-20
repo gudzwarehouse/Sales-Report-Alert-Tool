@@ -123,13 +123,16 @@ def _get_orders_page(
     return response
 
 
-def window_bounds(window_minutes: int) -> tuple[datetime, datetime]:
-    """(start, end) UTC of the hour-aligned window fetch_recent_order_rows queries."""
+def window_bounds(window_minutes: int, align_hours: int = 1) -> tuple[datetime, datetime]:
+    """(start, end) UTC of the window fetch_recent_order_rows queries: ends at
+    the last completed ``align_hours`` boundary (1 = last completed hour;
+    4 = last finished 4-hour block 00/04/08/12/16/20)."""
     end = datetime.now(timezone.utc).replace(minute=0, second=0, microsecond=0)
+    end = end.replace(hour=end.hour // align_hours * align_hours)
     return end - timedelta(minutes=window_minutes), end
 
 
-def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped") -> list[dict]:
+def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped", align_hours: int = 1) -> list[dict]:
     """Orders with CreatedDateUtc in the window_minutes ending at the last
     completed hour boundary (UTC, which is also GB-local since GMT/BST are
     both whole-hour offsets), one row per line item: {order_id,
@@ -150,7 +153,7 @@ def fetch_recent_order_rows(window_minutes: int, *, status: str = "Unshipped") -
     out wrong.
     """
     config = _config()
-    start, end = window_bounds(window_minutes)
+    start, end = window_bounds(window_minutes, align_hours)
     filter_value = (
         f"ProfileID eq {config['profile_id']} and "
         f"CreatedDateUtc ge {start.isoformat().replace('+00:00', 'Z')} and "
