@@ -31,88 +31,91 @@ st.markdown(
     """
 <style>
     :root {
-        --ink: #0f172a; --muted: #64748b; --line: #e2e8f0; --bg: #f8fafc;
-        --card: #ffffff; --accent: #0f172a; --danger: #dc2626;
+        --ink: #0f172a; --card: #ffffff; --line: #dbe1ea; --muted: #64748b; --soft: #f1f5f9;
+        --accent: #0f172a; --on-accent: #ffffff; --danger: #dc2626; --input: #ffffff;
     }
-    #MainMenu, header, footer, [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"] { display: none; }
+    @media (prefers-color-scheme: dark) {
+        :root {
+            --ink: #e5e7eb; --card: #151b26; --line: #2c3547; --muted: #94a3b8; --soft: #1b2332;
+            --accent: #e5e7eb; --on-accent: #0e1117; --danger: #f87171; --input: #1b2332;
+        }
+    }
+    #MainMenu, header, footer, [data-testid="stSidebar"], [data-testid="stSidebarCollapsedControl"],
+    [data-testid="stHeader"], [data-testid="stToolbar"], [data-testid="stStatusWidget"],
+    [data-testid="stDecoration"], [data-testid="stMainMenu"] { display: none !important; }
     html, body, .stApp, [class*="css"] {
         font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Inter, Roboto, "Helvetica Neue", Arial, sans-serif;
     }
-    .stApp { background: var(--bg); color: var(--ink); }
     .block-container { padding: 1.6rem 2rem 3rem; max-width: 1240px; }
 
-    /* header */
-    .app-head { display:flex; align-items:center; justify-content:space-between; margin-bottom: 1.1rem; }
-    .app-title { font-size: 1.35rem; font-weight: 700; letter-spacing: -.01em; color: var(--ink); margin: 0; }
+    .app-head { display:flex; align-items:center; justify-content:space-between; margin-bottom: 1.4rem; }
+    .app-title { font-size: 1.35rem; font-weight: 700; letter-spacing: -.01em; margin: 0; }
     .app-sub { color: var(--muted); font-size: .85rem; margin-top: 2px; }
     .chips { display:flex; gap:8px; }
     .chip { background: var(--card); border:1px solid var(--line); border-radius: 999px; padding: 4px 12px;
             font-size: .75rem; color: var(--muted); }
     .chip b { color: var(--ink); font-weight: 650; }
-
-    /* tabs */
     .stTabs [data-baseweb="tab-list"] { gap: 4px; border-bottom: 1px solid var(--line); }
     .stTabs [data-baseweb="tab"] { height: 40px; padding: 0 14px; font-size: .88rem; color: var(--muted); font-weight: 500; }
     .stTabs [aria-selected="true"] { color: var(--ink); font-weight: 650; }
     .stTabs [data-baseweb="tab-highlight"] { background: var(--ink); height: 2px; }
     .stTabs [data-baseweb="tab-panel"] { padding-top: 1.1rem; }
+    .section { font-size: 1.05rem; font-weight: 650; margin: 1.6rem 0 .15rem; }
+    .section-sub { font-size: .82rem; color: var(--muted); margin-bottom: .9rem; }
 
-    /* cards */
-    div[data-testid="stVerticalBlockBorderWrapper"]:has(> div > div > div > .card-marker),
     div[data-testid="stForm"], [data-testid="stExpander"] {
         background: var(--card); border: 1px solid var(--line) !important; border-radius: 12px;
-        box-shadow: 0 1px 2px rgba(15,23,42,.04);
     }
     div[data-testid="stForm"] { padding: 18px 20px; }
-    .card-title { font-size: .95rem; font-weight: 650; color: var(--ink); margin: 0; }
+    .card-title { font-size: .95rem; font-weight: 650; margin: 0; }
     .card-sub { font-size: .78rem; color: var(--muted); margin: 2px 0 10px; }
     .tag { display:inline-block; font-size: .68rem; font-weight: 650; letter-spacing:.03em; text-transform: uppercase;
-           padding: 2px 8px; border-radius: 6px; background:#f1f5f9; color:#475569; }
-    .tag.hot { background:#fef2f2; color:#b91c1c; }
+           padding: 2px 8px; border-radius: 6px; background: var(--soft); color: var(--muted); }
+    .tag.hot { background: color-mix(in srgb, var(--danger) 16%, transparent); color: var(--danger); }
     .bucket-head { display:flex; align-items:center; gap:8px; margin: 14px 0 6px; font-size:.85rem; font-weight:600; }
     .bucket-head:first-child { margin-top: 0; }
     hr { margin: 14px 0; border-color: var(--line); }
 
-    /* inputs & buttons */
     label, [data-testid="stWidgetLabel"] p { font-size: .78rem !important; color: var(--muted) !important; font-weight: 550 !important; }
-    .stTextInput input, .stNumberInput input, .stTextArea textarea {
-        font-size: .88rem; border-radius: 8px; background: #fff;
-    }
+    .stTextInput input, .stNumberInput input, .stTextArea textarea { font-size: .88rem; border-radius: 8px; }
+    [data-baseweb="input"], [data-baseweb="textarea"], [data-baseweb="base-input"] { border-radius: 8px !important; }
+    [data-testid="stFileUploaderDropzone"] { background: var(--soft); border: 1px dashed var(--line); border-radius: 10px; }
+    [data-testid="stFileUploaderDropzone"] button { background: transparent; color: var(--ink); border: 1px solid var(--line); }
+    div[role='dialog'] { background: var(--card) !important; color: var(--ink) !important; border: 1px solid var(--line); }
+    div[role='dialog'] button[aria-label='Close'] { color: var(--muted) !important; }
     .stButton > button, .stDownloadButton > button, [data-testid="stFormSubmitButton"] > button {
         border-radius: 8px; font-size: .82rem; font-weight: 550; min-height: 2.15rem; padding: 0 .9rem;
-        border: 1px solid var(--line); background: #fff; color: var(--ink);
+        border: 1px solid var(--line); background: transparent; color: var(--ink);
     }
-    .stButton > button:hover, .stDownloadButton > button:hover { border-color: #94a3b8; color: var(--ink); }
+    .stButton > button:hover, .stDownloadButton > button:hover { border-color: var(--muted); color: var(--ink); }
     button[kind="primary"], button[data-testid="stBaseButton-primary"], button[data-testid="stBaseButton-primaryFormSubmit"] {
-        background: var(--accent) !important; border-color: var(--accent) !important; color: #fff !important;
+        background: var(--accent) !important; border-color: var(--accent) !important; color: var(--on-accent) !important;
     }
-    button[kind="primary"]:hover, button[data-testid="stBaseButton-primary"]:hover { background: #1e293b !important; }
+    button[kind="primary"]:hover, button[data-testid="stBaseButton-primary"]:hover { opacity: .85; }
 
-    /* excluded-SKU table */
     .tbl-head { font-size:.7rem; font-weight:650; letter-spacing:.05em; text-transform:uppercase; color: var(--muted);
                 padding: 0 0 6px; border-bottom: 1px solid var(--line); }
-    [class*='st-key-skurow_'] { border-bottom: 1px solid #f1f5f9; padding: 0; }
-    [class*='st-key-skurow_']:hover { background: #f8fafc; }
+    [class*='st-key-skurow_'] { border-bottom: 1px solid var(--soft); padding: 0; }
+    [class*='st-key-skurow_']:hover { background: var(--soft); }
     [class*='st-key-skurow_'] [data-testid='stVerticalBlock'],
     [class*='st-key-skurow_'] [data-testid='stHorizontalBlock'] { gap: 0 !important; }
     [class*='st-key-skurow_'] p { margin: 0 !important; }
-    .sku-code { font-size: .84rem; font-weight: 650; color: var(--ink); font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+    .sku-code { font-size: .84rem; font-weight: 650; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
     .sku-name { font-size: .84rem; color: var(--muted); }
     [class*='st-key-del_'] button {
         background: transparent !important; border: none !important; box-shadow: none !important;
-        color: #94a3b8 !important; min-height: 1.5rem !important; height: 1.5rem !important; padding: 0 !important;
+        color: var(--muted) !important; min-height: 1.5rem !important; height: 1.5rem !important; padding: 0 !important;
     }
-    [class*='st-key-del_'] button:hover { color: var(--danger) !important; background: #fef2f2 !important; }
+    [class*='st-key-del_'] button:hover { color: var(--danger) !important; background: color-mix(in srgb, var(--danger) 14%, transparent) !important; }
 
-    /* confirmation popup */
     div[role='dialog'] { max-width: 340px !important; border-radius: 14px; }
     div[role='dialog'] h2 { font-size: 1rem !important; }
     div[role='dialog'] p { font-size: .85rem !important; }
     .st-key-confirm_delete_yes button { background: var(--danger) !important; border-color: var(--danger) !important; color:#fff !important; }
-    .st-key-confirm_delete_yes button:hover { background: #b91c1c !important; }
+    .st-key-confirm_delete_yes button:hover { opacity: .85; }
 
-    .note { background:#f1f5f9; border-radius:10px; padding:10px 14px; font-size:.8rem; color:#334155; }
-    .note.warn { background:#fef2f2; color:#991b1b; }
+    .note { background: var(--soft); border-radius:10px; padding:10px 14px; font-size:.8rem; color: var(--ink); }
+    .note.warn { background: color-mix(in srgb, var(--danger) 12%, transparent); color: var(--danger); }
     code { font-size: .8rem; }
 </style>
 """,
