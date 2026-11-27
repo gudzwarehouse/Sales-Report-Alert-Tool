@@ -190,21 +190,20 @@ def _fake_now(monkeypatch, hour, minute):
 
 
 def test_windows_wait_for_settle_delay(monkeypatch):
-    monkeypatch.delenv("WINDOW_SETTLE_MINUTES", raising=False)  # default 60
+    monkeypatch.delenv("WINDOW_SETTLE_MINUTES", raising=False)  # default 0
     ca = _fake_now(monkeypatch, 13, 10)
     start, end = ca.window_bounds(60)
-    assert (start.hour, end.hour) == (11, 12)
-    # 4h block 08-12 is NOT read until it has settled: 12:10 -> still block 04-08
+    assert (start.hour, end.hour) == (12, 13)
     ca = _fake_now(monkeypatch, 12, 10)
-    assert tuple(b.hour for b in ca.window_bounds(240, 4)) == (4, 8)
-    ca = _fake_now(monkeypatch, 13, 10)
     assert tuple(b.hour for b in ca.window_bounds(240, 4)) == (8, 12)
-    assert tuple(b.hour for b in ca.window_bounds(240)) == (8, 12)  # rolling 4h
+    ca = _fake_now(monkeypatch, 11, 10)
+    assert tuple(b.hour for b in ca.window_bounds(240, 4)) == (4, 8)
+    assert tuple(b.hour for b in ca.window_bounds(240)) == (7, 11)  # rolling 4h
 
 
 def test_settle_delay_is_configurable(monkeypatch):
-    monkeypatch.setenv("WINDOW_SETTLE_MINUTES", "0")
+    monkeypatch.setenv("WINDOW_SETTLE_MINUTES", "60")
     ca = _fake_now(monkeypatch, 13, 10)
-    assert tuple(b.hour for b in ca.window_bounds(60)) == (12, 13)
+    assert tuple(b.hour for b in ca.window_bounds(60)) == (11, 12)
     monkeypatch.setenv("WINDOW_SETTLE_MINUTES", "oops")
-    assert ca.settle_minutes() == 60
+    assert ca.settle_minutes() == 0

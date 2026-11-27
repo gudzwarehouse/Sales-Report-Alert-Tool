@@ -289,18 +289,15 @@ All of the above is now built (Phases 1-3) — see "Data source" above for
 what actually replaced CSV ingestion in the end (the ChannelAdvisor API,
 not the CSV drop originally planned here).
 
-## Window membership: order-placed time, read after a settle delay
+## Window membership: ChannelAdvisor arrival time (ImportDateUtc)
 
-Windows count orders by `CreatedDateUtc` (when the customer placed them).
-Measured live (2026-11-20, 829 orders): ChannelAdvisor lists Amazon UK orders
-~55 min after they're placed (median; p95 ~62 min; eBay ~4, Shopify ~11), so
-a slot reads only ~30% full 10 min after its hour ends (09:01 run saw 14
-lines, 09:31 saw 35 for the same slot). `ca_orders_client.window_bounds` therefore
-only ends a window at a boundary at least `WINDOW_SETTLE_MINUTES` (default
-60, `.env`) old: a 13:10 run reads the 1h slot 11-12 (not 12-13), and the 4h
-block 08-12 is first read by the 13:10 run (not 12:10). Alerts therefore
-arrive ~70 min after the slot ends. Counting by `ImportDateUtc` instead was
-tried and rejected: it changes what "11-12" means.
+Windows count orders by `ImportDateUtc` (when they appeared in ChannelAdvisor),
+the same basis as the old VBA "Orders Last 1 Hour" export (verified 2026-11-23:
+all 57 rows of the 16:00 file had ImportDateUtc 15:14-15:59, placed times 09:42-15:32).
+Amazon UK orders import ~55 min after being placed, so a placed-time (CreatedDateUtc)
+slot needed a 60 min wait and still missed ~5%; arrival time needs none.
+`WINDOW_SETTLE_MINUTES` defaults to 0: a 13:10 run reads the 1h slot 12-13 and 4h
+block 08-12. Samples of the old alerts: `docs/vba_alert_samples.md`.
 
 ## Schedule (as built)
 
