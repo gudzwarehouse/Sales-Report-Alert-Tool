@@ -31,6 +31,7 @@ import ca_orders_client
 import config_store
 import notifications
 import sku_lookup as sku_lookup_module
+import sku_titles
 from sales_pipeline import evaluate_1h, evaluate_4h
 
 
@@ -193,8 +194,9 @@ def main() -> None:
         eval_4h_roll = functools.partial(
             evaluate_4h, on_sku_hits=make_sku_hit_logger("4h_roll", 240),
             on_total_hit=make_total_hit_logger("4h_roll", 240))
-        counters["orders_4h"], _ = _check_window(
+        counters["orders_4h"], rows_4h = _check_window(
             "4h_roll", 240, eval_4h_roll, lookup, config, exceptions, lambda *a, **k: None)
+        sku_titles.update_from_rows(rows_4h, lookup)  # product names for the Excluded SKUs page
 
         # 4h, check B: the EMAIL alert. Fixed blocks 00-04, 04-08, ... (UTC),
         # evaluated once, at the first run after a block ends (a missed run
